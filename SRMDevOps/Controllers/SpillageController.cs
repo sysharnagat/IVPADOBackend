@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using SRMDevOps.Dto;
 using SRMDevOps.Repo;
 
 namespace SRMDevOps.Controllers
@@ -14,24 +15,6 @@ namespace SRMDevOps.Controllers
         public SpillageController(ISpillage spillage)
         {
             _spillage = spillage;
-        }
-
-        // Represents one segment (All / Feature / Client) with stats and spillage/timeline.
-        public sealed class SectionDto
-        {
-            public object? Stats { get; init; }
-            public object? Spillage { get; init; }
-        }
-
-        // Aggregated DTO returned by both endpoints:
-        // Produces JSON like:
-        // { "All": { "stats": ..., "spillage": ... }, "Feature": { ... }, "Client": { ... } }
-        public sealed class SpillageSummaryDto
-        {
-            public SectionDto All { get; init; } = new();
-            public SectionDto Feature { get; init; } = new();
-            public SectionDto Client { get; init; } = new();
-
         }
 
         // Aggregated endpoint for last N sprints:
