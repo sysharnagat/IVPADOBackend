@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SRMDevOps.DataAccess;
 using SRMDevOps.Dto;
@@ -388,11 +387,16 @@ namespace SRMDevOps.Repo
                 var trendFeature = await GetFeatureSpillageTrend(projectName, lastNSprints);
                 var trendClient = await GetClientSpillageTrend(projectName, lastNSprints);
 
+                // Fetch histories per section (filtered by parentType for feature/client)
+                var historyAll = await GetStoryHistoryLastNSprints(projectName, lastNSprints, null);
+                var historyFeature = await GetStoryHistoryLastNSprints(projectName, lastNSprints, "Feature");
+                var historyClient = await GetStoryHistoryLastNSprints(projectName, lastNSprints, "Client Issue");
+
                 var summary = new SpillageSummaryDto
                 {
-                    All = new SectionDto { Stats = statsAll, Spillage = trendAll },
-                    Feature = new SectionDto { Stats = statsFeature, Spillage = trendFeature },
-                    Client = new SectionDto { Stats = statsClient, Spillage = trendClient }
+                    All = new SectionDto { Stats = statsAll, Spillage = trendAll, History = historyAll },
+                    Feature = new SectionDto { Stats = statsFeature, Spillage = trendFeature, History = historyFeature },
+                    Client = new SectionDto { Stats = statsClient, Spillage = trendClient, History = historyClient }
                 };
 
                 return summary;
@@ -417,11 +421,16 @@ namespace SRMDevOps.Repo
                 var timelineFeature = await GetFeatureSpillageTimeline(projectName, timeframe);
                 var timelineClient = await GetClientSpillageTimeline(projectName, timeframe);
 
+                // Fetch histories per section filtered by parentType for feature/client
+                var historyAll = await GetStoryHistoryByTimeframe(projectName, timeframe, null);
+                var historyFeature = await GetStoryHistoryByTimeframe(projectName, timeframe, "Feature");
+                var historyClient = await GetStoryHistoryByTimeframe(projectName, timeframe, "Client Issue");
+
                 var summary = new SpillageSummaryDto
                 {
-                    All = new SectionDto { Stats = statsAll, Spillage = timelineAll },
-                    Feature = new SectionDto { Stats = statsFeature, Spillage = timelineFeature },
-                    Client = new SectionDto { Stats = statsClient, Spillage = timelineClient }
+                    All = new SectionDto { Stats = statsAll, Spillage = timelineAll, History = historyAll },
+                    Feature = new SectionDto { Stats = statsFeature, Spillage = timelineFeature, History = historyFeature },
+                    Client = new SectionDto { Stats = statsClient, Spillage = timelineClient, History = historyClient }
                 };
 
                 return summary;
@@ -430,6 +439,145 @@ namespace SRMDevOps.Repo
             {
                 Console.WriteLine(e.Message);
                 return new SpillageSummaryDto();
+            }
+        }
+
+        // New methods implementing the "spillage history per user story" logic.
+
+        public async Task<List<StoryHistoryDto>> GetStoryHistoryLastNSprints(string projectName, int lastNSprints, string? parentType = null)
+        {
+            try
+            {
+                var recent = await GetRecentSprintsAsync(projectName, lastNSprints);
+                if (!recent.Any()) return new List<StoryHistoryDto>();
+
+                var sprintPaths = recent.Select(s => s.Path).ToList();
+
+                var rowsQuery = _context.IvpUserStoryIterations
+                    .Join(_context.IvpUserStoryDetails,
+                          usi => usi.UserStoryId,
+                          usd => usd.UserStoryId,
+                          (usi, usd) => new { usi, usd })
+                    .Where(x => x.usi.IterationPath != null && sprintPaths.Contains(x.usi.IterationPath) &&
+                                x.usd.FirstInprogressTime != null);
+
+                if (!string.IsNullOrEmpty(parentType))
+                    rowsQuery = rowsQuery.Where(x => x.usd.ParentType == parentType);
+
+                var rows = await rowsQuery
+                    .Select(x => new
+                    {
+                        x.usd.UserStoryId,
+                        Title = x.usd.Title,
+                        State = x.usd.State,
+                        FirstInprogressTime = x.usd.FirstInprogressTime,
+                        ClosedDate = x.usd.ClosedDate,
+                        AssignedDate = x.usi.AssignedDate,
+                        IterationPath = x.usi.IterationPath
+                    })
+                    .ToListAsync();
+
+                if (!rows.Any()) return new List<StoryHistoryDto>();
+
+                var storyIds = rows.Select(r => r.UserStoryId).Distinct().ToList();
+
+                var countsQuery = _context.IvpUserStoryIterations
+                    .Where(i => storyIds.Contains(i.UserStoryId));
+
+                var counts = await countsQuery
+                    .GroupBy(i => i.UserStoryId)
+                    .Select(g => new { UserStoryId = g.Key, Total = g.Count() })
+                    .ToDictionaryAsync(x => x.UserStoryId, x => x.Total);
+
+                var result = rows
+                    .Select(r => new StoryHistoryDto
+                    {
+                        UserStoryId = r.UserStoryId,
+                        Title = r.Title ?? string.Empty,
+                        State = r.State ?? string.Empty,
+                        FirstInprogressTime = r.FirstInprogressTime,
+                        ClosedDate = r.ClosedDate,
+                        AssignedDate = r.AssignedDate,
+                        IterationPath = r.IterationPath ?? string.Empty,
+                        TotalHistoryCount = counts.TryGetValue(r.UserStoryId, out var c) ? c : 0
+                    })
+                    .OrderBy(r => r.AssignedDate)
+                    .ToList();
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+                return new List<StoryHistoryDto>();
+            }
+        }
+
+        public async Task<List<StoryHistoryDto>> GetStoryHistoryByTimeframe(string projectName, string timeframe, string? parentType = null)
+        {
+            try
+            {
+                var startDate = GetStartDate(timeframe);
+
+                var rowsQuery = _context.IvpUserStoryIterations
+                    .Join(_context.IvpUserStoryDetails,
+                          usi => usi.UserStoryId,
+                          usd => usd.UserStoryId,
+                          (usi, usd) => new { usi, usd })
+                    .Where(x =>
+                        x.usi.IterationPath != null &&
+                        x.usi.IterationPath.StartsWith(projectName) &&
+                        x.usi.IterationPath.Contains("\\") &&
+                        !x.usi.IterationPath.Contains("Rearch") &&
+                        x.usd.FirstInprogressTime >= startDate);
+
+                if (!string.IsNullOrEmpty(parentType))
+                    rowsQuery = rowsQuery.Where(x => x.usd.ParentType == parentType);
+
+                var rows = await rowsQuery
+                    .Select(x => new
+                    {
+                        x.usd.UserStoryId,
+                        Title = x.usd.Title,
+                        State = x.usd.State,
+                        FirstInprogressTime = x.usd.FirstInprogressTime,
+                        ClosedDate = x.usd.ClosedDate,
+                        AssignedDate = x.usi.AssignedDate,
+                        IterationPath = x.usi.IterationPath
+                    })
+                    .ToListAsync();
+
+                if (!rows.Any()) return new List<StoryHistoryDto>();
+
+                var storyIds = rows.Select(r => r.UserStoryId).Distinct().ToList();
+
+                var counts = await _context.IvpUserStoryIterations
+                    .Where(i => storyIds.Contains(i.UserStoryId))
+                    .GroupBy(i => i.UserStoryId)
+                    .Select(g => new { UserStoryId = g.Key, Total = g.Count() })
+                    .ToDictionaryAsync(x => x.UserStoryId, x => x.Total);
+
+                var result = rows
+                    .Select(r => new StoryHistoryDto
+                    {
+                        UserStoryId = r.UserStoryId,
+                        Title = r.Title ?? string.Empty,
+                        State = r.State ?? string.Empty,
+                        FirstInprogressTime = r.FirstInprogressTime,
+                        ClosedDate = r.ClosedDate,
+                        AssignedDate = r.AssignedDate,
+                        IterationPath = r.IterationPath ?? string.Empty,
+                        TotalHistoryCount = counts.TryGetValue(r.UserStoryId, out var c) ? c : 0
+                    })
+                    .OrderBy(r => r.AssignedDate)
+                    .ToList();
+
+                return result;
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+                return new List<StoryHistoryDto>();
             }
         }
     }

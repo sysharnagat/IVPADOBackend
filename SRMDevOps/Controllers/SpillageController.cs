@@ -1,53 +1,4 @@
-﻿//using System.Collections.Generic;
-//using System.Threading.Tasks;
-//using Microsoft.AspNetCore.Mvc;
-//using SRMDevOps.Dto;
-//using SRMDevOps.Repo;
-
-//namespace SRMDevOps.Controllers
-//{
-//    [Route("api/[controller]")]
-//    [ApiController]
-//    public class SpillageController : ControllerBase
-//    {
-//        private readonly ISpillage _spillage;
-
-//        public SpillageController(ISpillage spillage)
-//        {
-//            _spillage = spillage;
-//        }
-
-//        /// <summary>
-//        /// Unified summary endpoint. Use query parameters to select mode:
-//        /// - ?lastNSprints=5  -> last-N-sprints mode
-//        /// - ?timeframe=yearly -> timeframe mode ("yearly" or default 6 months)
-//        /// If both provided, lastNSprints takes precedence.
-//        /// </summary>
-//        [HttpGet("summary/{projectName}")]
-//        public async Task<IActionResult> GetSpillageSummary(
-//            string projectName,
-//            [FromQuery] int? lastNSprints,
-//            [FromQuery] string? timeframe)
-//        {
-//            // last-N-sprints mode (takes precedence when provided)
-//            if (lastNSprints.HasValue && lastNSprints.Value > 0)
-//            {
-//                // Fix: Pass lastNSprints.Value (int) instead of lastNSprints (int?)
-//                var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints.Value);
-//                return Ok(summary);
-//            }
-
-//            else
-//            {
-//                // timeframe mode (defaults to service behavior if timeframe is null/empty)
-//                var summary = await _spillage.GetSpillageSummaryTime(projectName, timeframe);
-//                return Ok(summary);
-//            }
-//        }
-//    }
-//}
-
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using SRMDevOps.Dto;
@@ -66,25 +17,74 @@ namespace SRMDevOps.Controllers
             _spillage = spillage;
         }
 
-        // Aggregated endpoint for last N sprints:
-        // Returns SpillageSummaryDto with segregated sections for clarity on the frontend.
-        [HttpGet("summary-last/{projectName}/{lastNSprints}")]
-        public async Task<IActionResult> GetSpillageSummaryLast(string projectName, int lastNSprints)
+        /// <summary>
+        /// Unified summary endpoint. Use query parameters to select mode:
+        /// - ?lastNSprints=5  -> last-N-sprints mode
+        /// - ?timeframe=yearly -> timeframe mode ("yearly" or default 6 months)
+        /// If both provided, lastNSprints takes precedence.
+        /// </summary>
+        [HttpGet("summary/{projectName}")]
+        public async Task<IActionResult> GetSpillageSummary(
+            string projectName,
+            [FromQuery] int? lastNSprints,
+            [FromQuery] string? timeframe)
         {
-            var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints);
-            return Ok(summary);
-        }
+            // last-N-sprints mode (takes precedence when provided)
+            if (lastNSprints.HasValue && lastNSprints.Value > 0)
+            {
+                // Fix: Pass lastNSprints.Value (int) instead of lastNSprints (int?)
+                var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints.Value);
+                return Ok(summary);
+            }
 
-        // Aggregated endpoint for timeframe-based queries:
-        // Returns SpillageSummaryDto with segregated sections for clarity on the frontend.
-        [HttpGet("summary-time/{projectName}/{timeframe}")]
-        public async Task<IActionResult> GetSpillageSummaryTime(string projectName, string timeframe)
-        {
-            var summary = await _spillage.GetSpillageSummaryTime(projectName, timeframe);
-            return Ok(summary);
+            else
+            {
+                // timeframe mode (defaults to service behavior if timeframe is null/empty)
+                var summary = await _spillage.GetSpillageSummaryTime(projectName, timeframe);
+                return Ok(summary);
+            }
         }
     }
 }
+
+//using System.Collections.Generic;
+//using System.Threading.Tasks;
+//using Microsoft.AspNetCore.Mvc;
+//using SRMDevOps.Dto;
+//using SRMDevOps.Repo;
+
+//namespace SRMDevOps.Controllers
+//{
+//    [Route("api/[controller]")]
+//    [ApiController]
+//    public class SpillageController : ControllerBase
+//    {
+//        private readonly ISpillage _spillage;
+
+//        public SpillageController(ISpillage spillage)
+//        {
+//            _spillage = spillage;
+//        }
+
+//        // Aggregated endpoint for last N sprints:
+//        // Returns SpillageSummaryDto with segregated sections for clarity on the frontend.
+//        [HttpGet("summary-last/{projectName}/{lastNSprints}")]
+//        public async Task<IActionResult> GetSpillageSummaryLast(string projectName, int lastNSprints)
+//        {
+//            var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints);
+//            return Ok(summary);
+//        }
+
+//        // Aggregated endpoint for timeframe-based queries:
+//        // Returns SpillageSummaryDto with segregated sections for clarity on the frontend.
+//        [HttpGet("summary-time/{projectName}/{timeframe}")]
+//        public async Task<IActionResult> GetSpillageSummaryTime(string projectName, string timeframe)
+//        {
+//            var summary = await _spillage.GetSpillageSummaryTime(projectName, timeframe);
+//            return Ok(summary);
+//        }
+//    }
+//}
 
 //using Microsoft.AspNetCore.Http;
 //using Microsoft.AspNetCore.Mvc;

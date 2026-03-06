@@ -20,8 +20,13 @@ namespace SRMDevOps.Repo
         Task<List<SpillageTrendDto>> GetClientSpillageTrend(string projectName, int lastNSprints);
         Task<List<SpillageTrendDto>> GetClientSpillageTimeline(string projectName, string timeframe);
 
-        // Aggregated business methods moved from controller
+        // Aggregated business methods (summary) — unchanged
         Task<SpillageSummaryDto> GetSpillageSummaryLast(string projectName, int lastNSprints);
         Task<SpillageSummaryDto> GetSpillageSummaryTime(string projectName, string timeframe);
+
+        // New: per-user-story history (added alongside existing summary functionality)
+        // parentType: null for all, "Feature" or "Client Issue" to filter
+        Task<List<StoryHistoryDto>> GetStoryHistoryLastNSprints(string projectName, int lastNSprints, string? parentType = null);
+        Task<List<StoryHistoryDto>> GetStoryHistoryByTimeframe(string projectName, string timeframe, string? parentType = null);
     }
 }
