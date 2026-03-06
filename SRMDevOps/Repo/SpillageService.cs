@@ -178,7 +178,7 @@
             {
                 try
                 {
-                    var recent = await GetRecentSprintsAsync(projectName, lastNSprints);
+                var recent = await GetRecentSprintsAsync(projectName, lastNSprints);
                     if (!recent.Any()) return new List<SprintProgressDto>();
 
                     var sprintPaths = recent.Select(s => s.Path).ToList();
