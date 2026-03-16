@@ -6,11 +6,15 @@ namespace SRMDevOps.Repo
     public interface ISpillage
     {
 
-        // Aggregated business methods (summary) — unchanged for last-N
-        Task<SpillageSummaryDto> GetSpillageSummaryLast(string projectName, int lastNSprints);
+        Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType);
+        Task<List<SpillageTrendDto>> GetSpillageTrendAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType);
+        Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints);
 
-        // Updated summary-by-time: supports periodUnit ("monthly","quarterly","yearly") and n = number of periods
-        Task<SpillageSummaryDto> GetSpillageSummaryTime(string projectName, string? periodUnit = null, int? n = null);
+        //// Aggregated business methods (summary) — unchanged for last-N
+        //Task<SpillageSummaryDto> GetSpillageSummaryLast(string projectName, int lastNSprints);
+
+        //// Updated summary-by-time: supports periodUnit ("monthly","quarterly","yearly") and n = number of periods
+        //Task<SpillageSummaryDto> GetSpillageSummaryTime(string projectName, string? periodUnit = null, int? n = null);
 
     }
 }
