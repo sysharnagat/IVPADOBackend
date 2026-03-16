@@ -30,29 +30,44 @@ namespace SRMDevOps.Controllers
     public class SpillageController : ControllerBase
     {
         private readonly ISpillage _spillage;
+        private readonly IADO _devops;
 
-        public SpillageController(ISpillage spillage, IConfiguration configuration)
+        public SpillageController(ISpillage spillage, IConfiguration configuration, IADO devops)
         {
             _spillage = spillage;
-            
+            _devops = devops;
         }
 
-        [HttpGet("summary/{projectName}")]
-        public async Task<IActionResult> GetSpillageSummary(
-            string projectName,
-            [FromQuery] int? lastNSprints,
-            [FromQuery] string? timeframe,
-            [FromQuery] int? n) 
-        {
-            // last-N-sprints mode (takes precedence when provided)
-            if (lastNSprints.HasValue && lastNSprints.Value > 0)
-            {
-                var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints.Value);
-                return Ok(summary);
-            }
+        //[HttpGet("summary/{projectName}")]
+        //public async Task<IActionResult> GetSpillageSummary(
+        //    string projectName,
+        //    [FromQuery] int? lastNSprints,
+        //    [FromQuery] string? timeframe,
+        //    [FromQuery] int? n) 
+        //{
+        //    // last-N-sprints mode (takes precedence when provided)
+        //    if (lastNSprints.HasValue && lastNSprints.Value > 0)
+        //    {
+        //        var summary = await _spillage.GetSpillageSummaryLast(projectName, lastNSprints.Value);
+        //        return Ok(summary);
+        //    }
 
-            var summaryTime = await _spillage.GetSpillageSummaryTime(projectName, timeframe, n);
-            return Ok(summaryTime);
+        //    var summaryTime = await _spillage.GetSpillageSummaryTime(projectName, timeframe, n);
+        //    return Ok(summaryTime);
+        //}
+
+        [HttpGet]
+        public async Task<IActionResult> GetStats(string projectId, string teamId, int lastN = 6)
+        {
+            // 1. Fetch ADO definitions (Dates and Paths)
+            var areaPaths = await _devops.GetTeamAreaPathsAsync(projectId, teamId);
+            var sprints = await _devops.GetRecentSprintsAsync(projectId, teamId, lastN);
+
+            // 2. Pass those to your SpillageService for the SQL calculation
+            // This removes the need for Regex or guessing dates in the DB
+            var results = await _spillage.GetFullSummaryAsync(areaPaths, sprints);
+
+            return Ok(results);
         }
     }
 }

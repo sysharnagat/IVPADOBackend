@@ -1,151 +1,131 @@
-﻿using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using SRMDevOps.Dto;
-using SRMDevOps.Repo;
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
+﻿//using Microsoft.AspNetCore.Http;
+//using Microsoft.AspNetCore.Mvc;
+//using SRMDevOps.Dto;
+//using SRMDevOps.Repo;
+//using System.Net.Http.Headers;
+//using System.Text;
+//using System.Text.Json;
 
-namespace SRMDevOps.Controllers
-{
-    [Route("api/[controller]")]
-    [ApiController]
-    public class DevopsController : ControllerBase
-    {
-        private readonly IADO _adoService;
-        private readonly IConfiguration _configuration;
+//namespace SRMDevOps.Controllers
+//{
+//    [Route("api/[controller]")]
+//    [ApiController]
+//    public class DevopsController : ControllerBase
+//    {
+//        private readonly IADO _adoService;
+//        private readonly IConfiguration _configuration;
 
-        public DevopsController(IADO adoService,IConfiguration configuration)
-        {
-            _adoService = adoService;
-            _configuration = configuration;
+//        public DevopsController(IADO adoService,IConfiguration configuration)
+//        {
+//            _adoService = adoService;
+//            _configuration = configuration;
 
-        }
+//        }
 
-        [HttpGet("devops-projects/")]
-        public async Task<IActionResult> GetProjects()
-        {
-            // 1. Move the PAT to configuration (appsettings.json)
-            var pat = _configuration["AzureDevOps:PAT"];
-            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}"));
+//        [HttpGet("devops-projects/")]
+//        public async Task<IActionResult> GetProjects()
+//        {
+//            // 1. Move the PAT to configuration (appsettings.json)
+//            var pat = _configuration["AzureDevOps:PAT"];
+//            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}"));
 
-            try
-            {
-                // Using a shared client or factory is better than 'new HttpClient()'
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+//            try
+//            {
+//                // Using a shared client or factory is better than 'new HttpClient()'
+//                using var client = new HttpClient();
+//                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+//                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 
-                // Note: This gets ALL projects. 
-                var url = $"https://dev.azure.com/Indusvalleypartners/_apis/projects/"; ;
+//                // Note: This gets ALL projects. 
+//                var url = $"https://dev.azure.com/Indusvalleypartners/_apis/projects/"; ;
 
-                var response = await client.GetAsync(url);
+//                var response = await client.GetAsync(url);
 
-                if (response.IsSuccessStatusCode)
-                {
-                    var content = await response.Content.ReadAsStringAsync();
-                    // You might want to parse this JSON to find the specific 'projectName'
-                    return Ok(content);
-                }
+//                if (response.IsSuccessStatusCode)
+//                {
+//                    var content = await response.Content.ReadAsStringAsync();
+//                    // You might want to parse this JSON to find the specific 'projectName'
+//                    return Ok(content);
+//                }
 
-                return StatusCode((int)response.StatusCode, "Error calling DevOps API");
-            }
-            catch (Exception ex)
-            {
-                // Log the actual error, don't just return NotFound
-                //_logger.LogError(ex, "Failed to fetch DevOps projects");
-                return StatusCode(500, "Internal Server Error");
-            }
-        }
-
-
-
-        [HttpGet("devops-teams/{projectId}")]
-        public async Task<IActionResult> GetProjectTeams(string projectId)
-        {
-            try
-            {
-                // 1. Fetch the raw JSON from the API
-                string rawJson = await _adoService.GetTeamsInProject(projectId);
-
-                // 2. Deserialize into our clean objects
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var result = JsonSerializer.Deserialize<AzureDevOpsResponse<TeamDto>>(rawJson, options);
-
-                // 3. Return the "Value" list (the actual teams)
-                return Ok(result?.Value ?? new List<TeamDto>());
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
-        }
+//                return StatusCode((int)response.StatusCode, "Error calling DevOps API");
+//            }
+//            catch (Exception ex)
+//            {
+//                // Log the actual error, don't just return NotFound
+//                //_logger.LogError(ex, "Failed to fetch DevOps projects");
+//                return StatusCode(500, "Internal Server Error");
+//            }
+//        }
 
 
-        [HttpGet("devops-area-paths/{projectId}/{teamId}")]
-        public async Task<IActionResult> GetProjectTeams([FromRoute] string projectId,[FromRoute] string teamId)
-        {
-            try
-            {
-                // 1. Fetch the raw JSON from the API
-                TeamFieldValuesDto result = await _adoService.GetTeamAreaPaths(projectId,teamId);
 
-                // 3. Return the "Value" list (the actual teams)
-                return Ok(result ?? new TeamFieldValuesDto());
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
-        }
+//        [HttpGet("devops-teams/{projectId}")]
+//        public async Task<IActionResult> GetProjectTeams(string projectId)
+//        {
+//            try
+//            {
+//                // 1. Fetch the raw JSON from the API
+//                string rawJson = await _adoService.GetTeamsInProject(projectId);
 
-        // Match the name used in your frontend: devops-iteration-stats
-        [HttpGet("devops-iteration-stats/{projectId}/{teamId}/{*areaPath}")]
-        public async Task<IActionResult> GetProjectStats(
-            [FromRoute] string projectId,
-            [FromRoute] string teamId,
-            [FromRoute] string areaPath,
-            [FromQuery] string? timeframe,
-            [FromQuery] int n)
-        {
-            try
-            {
-                // 1. Decode the URL encoding
-                // 2. Replace forward slashes (URL style) with backslashes (Database/ADO style)
-                string decodedPath = System.Net.WebUtility.UrlDecode(areaPath).Replace("/", "\\");
+//                // 2. Deserialize into our clean objects
+//                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+//                var result = JsonSerializer.Deserialize<AzureDevOpsResponse<TeamDto>>(rawJson, options);
 
-                // Debugging tip: Log the decodedPath here to ensure it matches your DB: 
-                // e.g., "IVP-SRM\Product Roadmap"
-                Console.WriteLine($"Calculated Area Path: {decodedPath}");
+//                // 3. Return the "Value" list (the actual teams)
+//                return Ok(result?.Value ?? new List<TeamDto>());
+//            }
+//            catch (Exception ex)
+//            {
+//                return StatusCode(500, $"Internal server error: {ex.Message}");
+//            }
+//        }
 
-                CombinedSprintDataDto result;
 
-                if (string.IsNullOrEmpty(timeframe))
-                {
-                    result = await _adoService.GetSprintAndSpillageDataAsync(projectId, teamId, decodedPath, lastNSprints: n);
-                    return Ok(result);
-                }
+//        [HttpGet("devops-area-paths/{projectId}/{teamId}")]
+//        public async Task<IActionResult> GetProjectTeams([FromRoute] string projectId,[FromRoute] string teamId)
+//        {
+//            try
+//            {
+//                // 1. Fetch the raw JSON from the API
+//                TeamFieldValuesDto result = await _adoService.GetTeamAreaPaths(projectId,teamId);
 
-                result = await _adoService.GetSprintStatsByTimeframeAsync(projectId, teamId, decodedPath, timeframe, n);
+//                // 3. Return the "Value" list (the actual teams)
+//                return Ok(result ?? new TeamFieldValuesDto());
+//            }
+//            catch (Exception ex)
+//            {
+//                return StatusCode(500, $"Internal server error: {ex.Message}");
+//            }
+//        }
 
-                return Ok(result ?? new CombinedSprintDataDto());
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, $"Internal server error: {ex.Message}");
-            }
-        }
-    }
+//        [HttpGet("devops-area-paths/{projectId}/{teamId}/{areaPath}/{lastNSprints}")]
+//        public async Task<IActionResult> GetProjectSats([FromRoute] string projectId, [FromRoute] string teamId, [FromRoute] string areaPath, [FromRoute] int lastNSprints)
+//        {
+//            try
+//            {
+//                // 1. Fetch the raw JSON from the API
+//                List<SprintProgressDto> result = await _adoService.GetSprintDataByAreaPathAsync(projectId,teamId,areaPath,lastNSprints);
 
-    public class TeamFieldValuesDto
-    {
-        public string DefaultValue { get; set; } // The primary Area Path
-        public List<AreaPathValue> Values { get; set; } // All associated Area Paths
-    }
+//                // 3. Return the "Value" list (the actual teams)
+//                return Ok(result ?? new List<SprintProgressDto>());
+//            }
+//            catch (Exception ex)
+//            {
+//                return StatusCode(500, $"Internal server error: {ex.Message}");
+//            }
+//        }
+//    }
 
-    public class AreaPathValue
-    {
-        public string Value { get; set; } // The Area Path string
-        public bool IncludeChildren { get; set; } // If sub-areas are included
-    }
-}
+//    public class TeamFieldValuesDto
+//    {
+//        public string DefaultValue { get; set; } // The primary Area Path
+//        public List<AreaPathValue> Values { get; set; } // All associated Area Paths
+//    }
+
+//    public class AreaPathValue
+//    {
+//        public string Value { get; set; } // The Area Path string
+//        public bool IncludeChildren { get; set; } // If sub-areas are included
+//    }
+//}
