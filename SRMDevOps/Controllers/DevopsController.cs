@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using SRMDevOps.Dto;
 using SRMDevOps.Repo;
 using System.Net.Http.Headers;
 using System.Text;
@@ -91,6 +92,23 @@ namespace SRMDevOps.Controllers
 
                 // 3. Return the "Value" list (the actual teams)
                 return Ok(result ?? new TeamFieldValuesDto());
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpGet("devops-area-paths/{projectId}/{teamId}/{areaPath}/{lastNSprints}")]
+        public async Task<IActionResult> GetProjectSats([FromRoute] string projectId, [FromRoute] string teamId, [FromRoute] string areaPath, [FromRoute] int lastNSprints)
+        {
+            try
+            {
+                // 1. Fetch the raw JSON from the API
+                List<SprintProgressDto> result = await _adoService.GetSprintDataByAreaPathAsync(projectId,teamId,areaPath,lastNSprints);
+
+                // 3. Return the "Value" list (the actual teams)
+                return Ok(result ?? new List<SprintProgressDto>());
             }
             catch (Exception ex)
             {
