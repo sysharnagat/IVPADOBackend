@@ -10,10 +10,9 @@ namespace SRMDevOps.Repo
         private readonly IConfiguration _configuration;
         private readonly string _baseUrl = "https://dev.azure.com/Indusvalleypartners";
 
-        public DevopsService(IConfiguration configuration, IvpadodashboardContext context)
+        public DevopsService(IConfiguration configuration)
         {
             _configuration = configuration;
-            _context = context;
         }
 
         private AuthenticationHeaderValue GetAuthHeader()
