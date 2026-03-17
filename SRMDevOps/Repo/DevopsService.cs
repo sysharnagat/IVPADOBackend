@@ -1,4 +1,5 @@
-﻿using SRMDevOps.Dto;
+﻿using SRMDevOps.DataAccess;
+using SRMDevOps.Dto;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ namespace SRMDevOps.Repo
     {
         private readonly IConfiguration _configuration;
         private readonly string _baseUrl = "https://dev.azure.com/Indusvalleypartners";
+        private readonly IvpadodashboardContext _context;
 
         public DevopsService(IConfiguration configuration, IvpadodashboardContext context)
         {

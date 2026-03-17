@@ -1,24 +1,4 @@
-# Visual Studio & .NET
-.vs/
-bin/
-obj/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-
-# Build results
-TestResults/
-*.vsix
-*.nupkg
-
-# Rider/IDE
-.idea/
-.vscode/
-
-# OS files
-Thumbs.db
-.DS_Store
-
-# Index files that sometimes lock
-*.vsidx
+SRMDevOps/appsettings.json 
+.vs/ 
+obj/ 
+bin/ 
