@@ -17,15 +17,18 @@ namespace SRMDevOps.Repo
             _context = context;
         }
 
-        private sealed record AggregatedStat(string FullPath, double Total, double Closed, DateTime? SortDate);
+        private sealed record AggregatedStat(string FullPath, double Total, double AddedLater, double Closed, 
+                 DateTime? SortDate);
 
         /// <summary>
         /// Internal DB Aggregator: Only returns data for iterations that exist in the DB.
         /// </summary>
+        /// 
+
         private async Task<List<AggregatedStat>> GetAggregatedStatsAsync(
-            List<string> adoAreaPaths,
-            Dictionary<string, (DateTime Start, DateTime End)> sprintDateMap,
-            string? parentType = null)
+    List<string> adoAreaPaths,
+    Dictionary<string, (DateTime Start, DateTime End)> sprintDateMap,
+    string? parentType = null)
         {
             var iterationPaths = sprintDateMap.Keys.ToList();
 
@@ -40,8 +43,10 @@ namespace SRMDevOps.Repo
             if (!string.IsNullOrEmpty(parentType) && !string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase))
                 query = query.Where(c => c.usd.ParentType == parentType);
 
+            // FIX: Include AssignedDate in the select
             var rawData = await query.Select(x => new {
                 x.usi.IterationPath,
+                x.usi.AssignedDate, // Needed to check if it was added late
                 x.usd.StoryPoints,
                 x.usd.ClosedDate
             }).ToListAsync();
@@ -51,17 +56,74 @@ namespace SRMDevOps.Repo
                 .Select(g => {
                     var path = g.Key ?? string.Empty;
                     if (!sprintDateMap.TryGetValue(path, out var dates))
-                        return new AggregatedStat(path, 0, 0, null);
+                        return new AggregatedStat(path, 0, 0, 0, null);
 
+                    var startLimit = dates.Start.Date;
                     var endLimit = dates.End.Date;
+
+                    // 1. Completed Points
                     var completedPoints = g.Where(x => x.ClosedDate.HasValue &&
                                                        x.ClosedDate.Value.Date <= endLimit)
                                            .Sum(x => x.StoryPoints ?? 0);
 
-                    return new AggregatedStat(path, g.Sum(x => x.StoryPoints ?? 0), completedPoints, dates.Start);
+                    // 2. Mid-Sprint Added Points (Logic: AssignedDate > Sprint Start Date)
+                    var addedLaterPoints = g.Where(x => x.AssignedDate.Date > startLimit)
+                                            .Sum(x => x.StoryPoints ?? 0);
+
+                    // 3. Initial Points (Logic: Total minus what was added late)
+                    var totalPoints = g.Sum(x => x.StoryPoints ?? 0);
+                    var initialPoints = totalPoints - addedLaterPoints;
+
+                    return new AggregatedStat(
+                        path,
+                        totalPoints, // We now treat "Total" as "Initially Assigned"
+                        addedLaterPoints, // Pass the new metric
+                        completedPoints,
+                        dates.Start
+                    );
                 })
                 .ToList();
         }
+        //private async Task<List<AggregatedStat>> GetAggregatedStatsAsync(
+        //    List<string> adoAreaPaths,
+        //    Dictionary<string, (DateTime Start, DateTime End)> sprintDateMap,
+        //    string? parentType = null)
+        //{
+        //    var iterationPaths = sprintDateMap.Keys.ToList();
+
+        //    var query = _context.IvpUserStoryIterations
+        //        .Join(_context.IvpUserStoryDetails,
+        //            usi => usi.UserStoryId,
+        //            usd => usd.UserStoryId,
+        //            (usi, usd) => new { usi, usd })
+        //        .Where(c => iterationPaths.Contains(c.usi.IterationPath) &&
+        //                    adoAreaPaths.Contains(c.usd.AreaPath));
+
+        //    if (!string.IsNullOrEmpty(parentType) && !string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase))
+        //        query = query.Where(c => c.usd.ParentType == parentType);
+
+        //    var rawData = await query.Select(x => new {
+        //        x.usi.IterationPath,
+        //        x.usd.StoryPoints,
+        //        x.usd.ClosedDate
+        //    }).ToListAsync();
+
+        //    return rawData
+        //        .GroupBy(x => x.IterationPath)
+        //        .Select(g => {
+        //            var path = g.Key ?? string.Empty;
+        //            if (!sprintDateMap.TryGetValue(path, out var dates))
+        //                return new AggregatedStat(path, 0, 0, null);
+
+        //            var endLimit = dates.End.Date;
+        //            var completedPoints = g.Where(x => x.ClosedDate.HasValue &&
+        //                                               x.ClosedDate.Value.Date <= endLimit)
+        //                                   .Sum(x => x.StoryPoints ?? 0);
+
+        //            return new AggregatedStat(path, g.Sum(x => x.StoryPoints ?? 0), completedPoints, dates.Start);
+        //        })
+        //        .ToList();
+        //}
 
         public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
         {
@@ -84,7 +146,9 @@ namespace SRMDevOps.Repo
                     {
                         IterationPath = s.Name,
                         TotalPointsAssigned = dbMatch?.Total ?? 0,
+                        MidSprintAddedPoints = dbMatch?.AddedLater ?? 0,
                         TotalPointsCompleted = dbMatch?.Closed ?? 0,
+                        
                         SortDate = s.Attributes.StartDate
                     };
                 })
@@ -195,7 +259,6 @@ namespace SRMDevOps.Repo
 
         public async Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> areaPaths, List<SprintDto> adoSprints)
         {
-            // Note: We use the EXACT same areaPaths and adoSprints for every section to ensure data parity.
             return new SpillageSummaryDto
             {
                 All = new SectionDto
