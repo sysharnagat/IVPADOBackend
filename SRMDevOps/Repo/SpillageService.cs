@@ -17,12 +17,10 @@ namespace SRMDevOps.Repo
             _context = context;
         }
 
-        // Private aggregate holder to return from in-memory mapping
         private sealed record AggregatedStat(string FullPath, double Total, double Closed, DateTime? SortDate);
 
         /// <summary>
-        /// CORE AGGREGATOR: Filters DB by API-provided Area Paths and calculates points 
-        /// using official ADO Start/End dates.
+        /// Internal DB Aggregator: Only returns data for iterations that exist in the DB.
         /// </summary>
         private async Task<List<AggregatedStat>> GetAggregatedStatsAsync(
             List<string> adoAreaPaths,
@@ -31,19 +29,17 @@ namespace SRMDevOps.Repo
         {
             var iterationPaths = sprintDateMap.Keys.ToList();
 
-            // Join Iterations and Details tables
             var query = _context.IvpUserStoryIterations
                 .Join(_context.IvpUserStoryDetails,
                     usi => usi.UserStoryId,
                     usd => usd.UserStoryId,
                     (usi, usd) => new { usi, usd })
                 .Where(c => iterationPaths.Contains(c.usi.IterationPath) &&
-                            adoAreaPaths.Contains(c.usd.AreaPath)); // Exact filtering based on ADO Team Settings
+                            adoAreaPaths.Contains(c.usd.AreaPath));
 
-            if (!string.IsNullOrEmpty(parentType))
+            if (!string.IsNullOrEmpty(parentType) && !string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase))
                 query = query.Where(c => c.usd.ParentType == parentType);
 
-            // Fetch data into memory for final grouping
             var rawData = await query.Select(x => new {
                 x.usi.IterationPath,
                 x.usd.StoryPoints,
@@ -54,139 +50,171 @@ namespace SRMDevOps.Repo
                 .GroupBy(x => x.IterationPath)
                 .Select(g => {
                     var path = g.Key ?? string.Empty;
-
-                    // Retrieve official dates from the API Map
                     if (!sprintDateMap.TryGetValue(path, out var dates))
                         return new AggregatedStat(path, 0, 0, null);
 
-                    // Logic: Sum points where ClosedDate in DB is <= the official FinishDate from API
                     var endLimit = dates.End.Date;
                     var completedPoints = g.Where(x => x.ClosedDate.HasValue &&
                                                        x.ClosedDate.Value.Date <= endLimit)
                                            .Sum(x => x.StoryPoints ?? 0);
 
-                    return new AggregatedStat(
-                        path,
-                        g.Sum(x => x.StoryPoints ?? 0), // Total Assigned to this path
-                        completedPoints,
-                        dates.Start // Used for sorting
-                    );
+                    return new AggregatedStat(path, g.Sum(x => x.StoryPoints ?? 0), completedPoints, dates.Start);
                 })
                 .ToList();
         }
 
-        /// <summary>
-        /// Main method to fetch Sprint Progress. 
-        /// Call this by passing the AreaPaths and Sprints retrieved from DevopsService.
-        /// </summary>
-        /// <summary>
-        /// Fetches Sprint Stats (Assigned vs Completed) filtered by ParentType (All, Feature, Client Issue)
-        /// </summary>
-        public async Task<List<SprintProgressDto>> GetSprintStatsAsync(
-            List<string> adoAreaPaths,
-            List<SprintDto> adoSprints,
-            string? parentType = null)
+        public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
         {
             try
             {
                 if (adoSprints == null || !adoSprints.Any()) return new List<SprintProgressDto>();
 
-                // Create the date map from API objects
-                var dateMap = adoSprints
-                    .Where(s => s.Attributes != null && s.Attributes.StartDate.HasValue && s.Attributes.FinishDate.HasValue)
-                    .ToDictionary(
-                        s => s.Path,
-                        s => (s.Attributes.StartDate.Value, s.Attributes.FinishDate.Value),
-                        StringComparer.OrdinalIgnoreCase
-                    );
+                var dateMap = adoSprints.ToDictionary(
+                    s => s.Path,
+                    s => (s.Attributes.StartDate.Value, s.Attributes.FinishDate.Value),
+                    StringComparer.OrdinalIgnoreCase
+                );
 
-                // Normalize parentType: treat "all" as null to ignore the filter
-                string? filterType = (string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase)) ? null : parentType;
+                var aggregated = await GetAggregatedStatsAsync(adoAreaPaths, dateMap, parentType);
 
-                // Fetch from DB using the provided parentType
-                var aggregated = await GetAggregatedStatsAsync(adoAreaPaths, dateMap, filterType);
-
-                // Map to Final DTO
-                return aggregated.Select(s => new SprintProgressDto
-                {
-                    IterationPath = s.FullPath.Split('\\').Last(), // Clean name for UI
-                    TotalPointsAssigned = s.Total,
-                    TotalPointsCompleted = s.Closed,
-                    SortDate = s.SortDate
+                // FIX: Map against the FULL list of ADO Sprints so empty ones show up as 0
+                return adoSprints.Select(s => {
+                    var dbMatch = aggregated.FirstOrDefault(a => a.FullPath.Equals(s.Path, StringComparison.OrdinalIgnoreCase));
+                    return new SprintProgressDto
+                    {
+                        IterationPath = s.Name,
+                        TotalPointsAssigned = dbMatch?.Total ?? 0,
+                        TotalPointsCompleted = dbMatch?.Closed ?? 0,
+                        SortDate = s.Attributes.StartDate
+                    };
                 })
                 .OrderBy(x => x.SortDate)
                 .ToList();
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error calculating sprint stats for {parentType}: {e.Message}");
+                Console.WriteLine($"Stats Error: {e.Message}");
                 return new List<SprintProgressDto>();
             }
         }
 
-        /// <summary>
-        /// Fetches Spillage Trends filtered by ParentType (All, Feature, Client Issue)
-        /// </summary>
-        public async Task<List<SpillageTrendDto>> GetSpillageTrendAsync(
-            List<string> adoAreaPaths,
-            List<SprintDto> adoSprints,
-            string? parentType = null)
+        public async Task<List<SpillageTrendDto>> GetSpillageTrendAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
         {
             try
             {
                 if (adoSprints == null || !adoSprints.Any()) return new List<SpillageTrendDto>();
 
-                var dateMap = adoSprints
-                    .Where(s => s.Attributes != null && s.Attributes.StartDate.HasValue && s.Attributes.FinishDate.HasValue)
-                    .ToDictionary(
-                        s => s.Path,
-                        s => (s.Attributes.StartDate.Value, s.Attributes.FinishDate.Value),
-                        StringComparer.OrdinalIgnoreCase
-                    );
+                var dateMap = adoSprints.ToDictionary(
+                    s => s.Path,
+                    s => (s.Attributes.StartDate.Value, s.Attributes.FinishDate.Value),
+                    StringComparer.OrdinalIgnoreCase
+                );
 
-                string? filterType = (string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase)) ? null : parentType;
+                var aggregated = await GetAggregatedStatsAsync(adoAreaPaths, dateMap, parentType);
 
-                var stats = await GetAggregatedStatsAsync(adoAreaPaths, dateMap, filterType);
-
-                return stats
-                    .OrderBy(s => s.SortDate)
-                    .Select(s => new SpillageTrendDto
+                // FIX: Map against the FULL list of ADO Sprints
+                return adoSprints.Select(s => {
+                    var dbMatch = aggregated.FirstOrDefault(a => a.FullPath.Equals(s.Path, StringComparison.OrdinalIgnoreCase));
+                    return new SpillageTrendDto
                     {
-                        IterationPath = s.FullPath.Split('\\').Last(),
-                        SpillagePoints = s.Total - s.Closed, // Spillage Calculation
-                        SortDate = s.SortDate
-                    })
-                    .ToList();
+                        IterationPath = s.Name,
+                        SpillagePoints = (dbMatch?.Total ?? 0) - (dbMatch?.Closed ?? 0),
+                        SortDate = s.Attributes.StartDate
+                    };
+                })
+                .OrderBy(x => x.SortDate)
+                .ToList();
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error calculating spillage trend for {parentType}: {e.Message}");
+                Console.WriteLine($"Trend Error: {e.Message}");
                 return new List<SpillageTrendDto>();
             }
         }
-        // --- MAPPING HELPERS FOR SUMMARY ---
+
+        public async Task<List<StoryHistoryDto>> GetStoryHistoryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
+        {
+            try
+            {
+                if (adoSprints == null || !adoSprints.Any()) return new List<StoryHistoryDto>();
+
+                var sprintPaths = adoSprints.Select(s => s.Path).ToList();
+
+                var rowsQuery = _context.IvpUserStoryIterations
+                    .Join(_context.IvpUserStoryDetails,
+                        usi => usi.UserStoryId,
+                        usd => usd.UserStoryId,
+                        (usi, usd) => new { usi, usd })
+                    .Where(x => adoAreaPaths.Contains(x.usd.AreaPath) &&
+                                sprintPaths.Contains(x.usi.IterationPath));
+
+                if (!string.IsNullOrEmpty(parentType) && !string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase))
+                    rowsQuery = rowsQuery.Where(x => x.usd.ParentType == parentType);
+
+                var rows = await rowsQuery
+                    .Select(x => new {
+                        x.usd.UserStoryId,
+                        x.usd.Title,
+                        x.usd.State,
+                        x.usd.FirstInprogressTime,
+                        x.usd.ClosedDate,
+                        x.usi.AssignedDate,
+                        x.usi.IterationPath
+                    })
+                    .ToListAsync();
+
+                if (!rows.Any()) return new List<StoryHistoryDto>();
+
+                var storyIds = rows.Select(r => r.UserStoryId).Distinct().ToList();
+                var counts = await _context.IvpUserStoryIterations
+                    .Where(i => storyIds.Contains(i.UserStoryId))
+                    .GroupBy(i => i.UserStoryId)
+                    .Select(g => new { UserStoryId = g.Key, Total = g.Count() })
+                    .ToDictionaryAsync(x => x.UserStoryId, x => x.Total);
+
+                return rows.Select(r => new StoryHistoryDto
+                {
+                    UserStoryId = r.UserStoryId,
+                    Title = r.Title ?? string.Empty,
+                    State = r.State ?? string.Empty,
+                    FirstInprogressTime = r.FirstInprogressTime,
+                    ClosedDate = r.ClosedDate,
+                    AssignedDate = r.AssignedDate,
+                    IterationPath = r.IterationPath ?? string.Empty,
+                    TotalHistoryCount = counts.TryGetValue(r.UserStoryId, out var c) ? c : 0
+                })
+                .OrderByDescending(r => r.AssignedDate)
+                .ToList();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"History Error: {e.Message}");
+                return new List<StoryHistoryDto>();
+            }
+        }
 
         public async Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> areaPaths, List<SprintDto> adoSprints)
         {
+            // Note: We use the EXACT same areaPaths and adoSprints for every section to ensure data parity.
             return new SpillageSummaryDto
             {
-                // "All" - pass "all" or null
                 All = new SectionDto
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "all"),
-                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "all")
+                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "all"),
+                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "all")
                 },
-                // "Feature"
                 Feature = new SectionDto
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Feature"),
-                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Feature")
+                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Feature"),
+                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "Feature")
                 },
-                // "Client Issue"
                 Client = new SectionDto
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Client Issue"),
-                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Client Issue")
+                    Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Client Issue"),
+                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "Client Issue")
                 }
             };
         }

@@ -1,4 +1,11 @@
+<<<<<<< HEAD
 ﻿SRMDevOps/appsettings.json 
 .vs/ 
 obj/ 
 bin/ 
+=======
+SRMDevOps/appsettings.json 
+.vs/ 
+obj/ 
+bin/ 
+>>>>>>> e17e2dfd82e71eda180f67048f5a9d463e8a921e
