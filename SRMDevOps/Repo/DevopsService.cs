@@ -3,6 +3,7 @@ using SRMDevOps.Controllers;
 using SRMDevOps.DataAccess;
 using SRMDevOps.Dto;
 using System.Net.Http.Headers;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 
@@ -245,6 +246,79 @@ namespace SRMDevOps.Repo
 
             return result;
         }
+
+        public async Task<List<Identity>> GetTeamMembersAsync(string projectId, string teamId)
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = GetAuthHeader();
+
+            // Official ADO endpoint for team members
+            string url = $"{_baseUrl}/_apis/projects/{projectId}/teams/{teamId}/members?api-version=7.1";
+
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return new List<Identity>();
+
+            var data = await response.Content.ReadFromJsonAsync<TeamMemberResponse>(
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            return data?.Value.Select(v => v.Identity).ToList() ?? new List<Identity>();
+        }
+
+    //    public async Task<List<DeveloperSprintStatsDto>> GetDeveloperSprintMetricsAsync(
+    //string projectId,
+    //string teamId,
+    //string iterationPath,
+    //DateTime sprintEnd)
+    //    {
+    //        // 1. Fetch official team members from ADO
+    //        var members = await GetTeamMembersAsync(projectId, teamId);
+    //        var results = new List<DeveloperSprintStatsDto>();
+    //        var doneStates = new[] { "Closed", "Done", "Completed" };
+
+    //        foreach (var member in members)
+    //        {
+    //            // 2. Join the three Task tables
+    //            var memberTasks = await _context.IvpTaskIterations
+    //                .Join(_context.IvpTaskAssignees,
+    //                    ti => ti.TaskId,
+    //                    ta => ta.TaskId,
+    //                    (ti, ta) => new { ti, ta })
+    //                .Join(_context.IvpTaskDetails,
+    //                    combined => combined.ti.TaskId,
+    //                    td => td.TaskId,
+    //                    (combined, td) => new { combined.ti, combined.ta, td })
+    //                .Where(x => x.ti.IterationPath == iterationPath &&
+    //                            x.ta.AssignedTo == member.DisplayName) // Pivot on Developer Name
+    //                .Select(x => new {
+    //                    x.td.TaskId,
+    //                    x.td.DevEffort,
+    //                    x.td.State,
+    //                    x.td.ClosedDate
+    //                })
+    //                .ToListAsync();
+
+    //            // 3. Calculate metrics based on Sprint End Boundary
+    //            double totalEffortAssigned = memberTasks.Sum(t => t.DevEffort ?? 0);
+
+    //            double effortCompletedOnTime = memberTasks
+    //                .Where(t => !string.IsNullOrEmpty(t.State) &&
+    //                            doneStates.Contains(t.State, StringComparer.OrdinalIgnoreCase) &&
+    //                            t.ClosedDate.HasValue && t.ClosedDate.Value.Date <= sprintEnd.Date)
+    //                .Sum(t => t.DevEffort ?? 0);
+
+    //            results.Add(new DeveloperSprintStatsDto
+    //            {
+    //                DeveloperName = member.DisplayName,
+    //                Email = member.UniqueName,
+    //                EffortAssigned = totalAssigned,
+    //                EffortCompleted = effortCompletedOnTime,
+    //                SpillageEffort = totalEffortAssigned - effortCompletedOnTime,
+    //                TaskCount = memberTasks.Count
+    //            });
+    //        }
+
+    //        return results;
+    //    }
     }
 
     public class AzureDevOpsResponse<T>
@@ -270,5 +344,39 @@ namespace SRMDevOps.Repo
     {
         public List<SprintProgressDto> Stats { get; set; }
         public List<SpillageTrendDto> Spillage { get; set; }
+    }
+
+    public class TeamMemberResponse
+    {
+        public int Count { get; set; }
+        public List<TeamMemberValue> Value { get; set; } = new();
+    }
+
+    public class TeamMemberValue
+    {
+        public Identity Identity { get; set; }
+    }
+
+    public class Identity
+    {
+        public string DisplayName { get; set; }
+        public string UniqueName { get; set; } // Usually the Email
+        public string Id { get; set; }
+    }
+    public class SprintMemberDetailsDto
+    {
+        public string Name { get; set; }
+        public string Email { get; set; }
+        public double TotalTasksAssigned { get; set; }
+        public double TotalTasksCompleted { get; set; }
+        public List<WorkItemSummaryDto> WorkItems { get; set; } = new();
+    }
+
+    public class WorkItemSummaryDto
+    {
+        public int Id { get; set; }
+        public string Title { get; set; }
+        public string State { get; set; }
+        public double PointsOrHours { get; set; }
     }
 }

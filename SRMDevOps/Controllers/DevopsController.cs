@@ -84,24 +84,38 @@ namespace SRMDevOps.Controllers
             }
         }
 
+        [HttpGet("devops-team-members")]
+        public async Task<IActionResult> GetTeamMembers([FromQuery] string projectId, [FromQuery] string teamId)
+        {
+            try
+            {
+                List<Identity> result = await _adoService.GetTeamMembersAsync(projectId, teamId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
 
-//    //    [HttpGet("devops-area-paths/{projectId}/{teamId}/{areaPath}/{lastNSprints}")]
-//    //    public async Task<IActionResult> GetProjectSats([FromRoute] string projectId, [FromRoute] string teamId, [FromRoute] string areaPath, [FromRoute] int lastNSprints)
-//    //    {
-//    //        try
-//    //        {
-//    //            // 1. Fetch the raw JSON from the API
-//    //            List<SprintProgressDto> result = await _adoService.GetSprintDataByAreaPathAsync(projectId, teamId, areaPath, lastNSprints);
 
-//    //            // 3. Return the "Value" list (the actual teams)
-//    //            return Ok(result ?? new List<SprintProgressDto>());
-//    //        }
-//    //        catch (Exception ex)
-//    //        {
-//    //            return StatusCode(500, $"Internal server error: {ex.Message}");
-//    //        }
-//    //    }
-//    //}
+        //    //    [HttpGet("devops-area-paths/{projectId}/{teamId}/{areaPath}/{lastNSprints}")]
+        //    //    public async Task<IActionResult> GetProjectSats([FromRoute] string projectId, [FromRoute] string teamId, [FromRoute] string areaPath, [FromRoute] int lastNSprints)
+        //    //    {
+        //    //        try
+        //    //        {
+        //    //            // 1. Fetch the raw JSON from the API
+        //    //            List<SprintProgressDto> result = await _adoService.GetSprintDataByAreaPathAsync(projectId, teamId, areaPath, lastNSprints);
+
+        //    //            // 3. Return the "Value" list (the actual teams)
+        //    //            return Ok(result ?? new List<SprintProgressDto>());
+        //    //        }
+        //    //        catch (Exception ex)
+        //    //        {
+        //    //            return StatusCode(500, $"Internal server error: {ex.Message}");
+        //    //        }
+        //    //    }
+        //    //}
 
         //[HttpGet("devops-area-paths/{projectId}/{teamId}/{areaPath}/{lastNSprints}")]
         //public async Task<IActionResult> GetProjectSats([FromRoute] string projectId, [FromRoute] string teamId, [FromRoute] string areaPath, [FromRoute] int lastNSprints)
@@ -131,5 +145,14 @@ namespace SRMDevOps.Controllers
     {
         public string Value { get; set; } // The Area Path string
         public bool IncludeChildren { get; set; } // If sub-areas are included
+    }
+
+    public class DeveloperSprintStatsDto
+    {
+        public string DeveloperName { get; set; }
+        public double HoursAssigned { get; set; }
+        public double HoursCompleted { get; set; }
+        public double SpillageHours => HoursAssigned - HoursCompleted;
+        public List<string> SpilledTaskIds { get; set; } = new();
     }
 }

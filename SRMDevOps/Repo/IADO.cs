@@ -18,6 +18,8 @@ namespace SRMDevOps.Repo
         string? timeframe,
         int n);
 
+        Task<List<Identity>> GetTeamMembersAsync(string projectId, string teamId);
+
         //public Task<string> GetTeamsInProject(string projectName);
         //public Task<TeamFieldValuesDto> GetTeamAreaPaths(string projectName, string teamName);
 
