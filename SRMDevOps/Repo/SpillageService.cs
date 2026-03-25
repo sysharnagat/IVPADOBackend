@@ -208,15 +208,18 @@ namespace SRMDevOps.Repo
                 return new List<SpillageTrendDto>();
             }
         }
-
-        public async Task<List<StoryHistoryDto>> GetStoryHistoryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
+        public async Task<List<ParentImpactDto>> GetImpactedParentHistoryAsync(
+            List<string> adoAreaPaths,
+            List<SprintDto> adoSprints,
+            string? parentType = null)
         {
             try
             {
-                if (adoSprints == null || !adoSprints.Any()) return new List<StoryHistoryDto>();
+                if (adoSprints == null || !adoSprints.Any()) return new List<ParentImpactDto>();
 
                 var sprintPaths = adoSprints.Select(s => s.Path).ToList();
 
+                // 1. Join Iterations and Details to find spilled stories
                 var rowsQuery = _context.IvpUserStoryIterations
                     .Join(_context.IvpUserStoryDetails,
                         usi => usi.UserStoryId,
@@ -224,55 +227,70 @@ namespace SRMDevOps.Repo
                         (usi, usd) => new { usi, usd })
                     .Where(x => adoAreaPaths.Contains(x.usd.AreaPath) &&
                                 sprintPaths.Contains(x.usi.IterationPath) &&
-                                x.usd.ParentType != null);
+                                x.usd.ParentId != null); // Ensure there is a parent ID to group by
 
+                // Filter by Parent Type (e.g., "Feature" or "Client Issue")
                 if (!string.IsNullOrEmpty(parentType) && !string.Equals(parentType, "all", StringComparison.OrdinalIgnoreCase))
                     rowsQuery = rowsQuery.Where(x => x.usd.ParentType == parentType);
 
                 var rows = await rowsQuery
                     .Select(x => new {
                         x.usd.UserStoryId,
-                        x.usd.Title,
+                        x.usd.ParentId,
                         x.usd.State,
-                        x.usd.FirstInprogressTime,
-                        x.usd.ClosedDate,
                         x.usi.AssignedDate,
-                        x.usi.IterationPath
+                        x.usd.StoryPoints
                     })
                     .ToListAsync();
 
-                if (!rows.Any()) return new List<StoryHistoryDto>();
+                if (!rows.Any()) return new List<ParentImpactDto>();
 
-                // 3. Spillage Count: How many times has this story appeared in ANY iteration?
+                // 2. Calculate "Spillage Hops" for each unique story
                 var storyIds = rows.Select(r => r.UserStoryId).Distinct().ToList();
-                var counts = await _context.IvpUserStoryIterations
+                var spillageCounts = await _context.IvpUserStoryIterations
                     .Where(i => storyIds.Contains(i.UserStoryId))
                     .GroupBy(i => i.UserStoryId)
                     .Select(g => new { UserStoryId = g.Key, Total = g.Count() })
                     .ToDictionaryAsync(x => x.UserStoryId, x => x.Total);
 
-                // 4. Map to DTO
-                return rows.Select(r => new StoryHistoryDto
-                {
-                    UserStoryId = r.UserStoryId,
-                    Title = r.Title ?? string.Empty,
-                    State = r.State ?? string.Empty,
-                    FirstInprogressTime = r.FirstInprogressTime,
-                    ClosedDate = r.ClosedDate,
-                    AssignedDate = r.AssignedDate,
-                    IterationPath = r.IterationPath ?? string.Empty,
-                    TotalHistoryCount = counts.TryGetValue(r.UserStoryId, out var c) ? c : 0
-                })
-                .OrderByDescending(r => r.AssignedDate)
-                .ToList();
+                // 3. Group by ParentId to show impacted details per Feature/Client Issue
+                // 3. Group by ParentId with fixed aggregation logic
+                var result = rows
+                    .GroupBy(r => r.ParentId)
+                    .Select(g => {
+                        // Fix 1: Get unique stories to sum points correctly
+                        var uniqueStories = g.GroupBy(s => s.UserStoryId)
+                                             .Select(group => group.First())
+                                             .ToList();
+
+                        // Fix 2: Determine parent status by "most advanced" child state
+                        var states = g.Select(x => x.State).ToList();
+                        string calculatedStatus = states.Contains("In Progress") ? "In Progress" :
+                                                  states.Contains("New") && states.Contains("Closed") ? "In Progress" :
+                                                  states.OrderByDescending(s => s == "Closed").First();
+
+                        return new ParentImpactDto
+                        {
+                            ParentId = g.Key,
+                            ImpactedStoriesCount = uniqueStories.Count,
+                            // Sum points only once per story ID
+                            TotalPointsImpacted = uniqueStories.Sum(x => x.StoryPoints ?? 0),
+                            MaxSpillageHops = g.Max(x => spillageCounts.ContainsKey(x.UserStoryId) ? spillageCounts[x.UserStoryId] : 0),
+                            ParentStatus = calculatedStatus,
+                            LatestAssignedDate = g.Max(x => x.AssignedDate)
+                        };
+                    })
+                    .OrderByDescending(r => r.LatestAssignedDate)
+                    .ToList();
+
+                return result;
             }
             catch (Exception e)
             {
-                Console.WriteLine($"History Error: {e.Message}");
-                return new List<StoryHistoryDto>();
+                Console.WriteLine($"Parent Impact Error: {e.Message}");
+                return new List<ParentImpactDto>();
             }
         }
-
         // for monthly/quarterly timeframe
         public async Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(
             string? timeframe,
@@ -389,19 +407,19 @@ namespace SRMDevOps.Repo
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "all"),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "all"),
-                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "all")
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "all")
                 },
                 Feature = new SectionDto
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Feature"),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Feature"),
-                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "Feature")
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "Feature")
                 },
                 Client = new SectionDto
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Client Issue"),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Client Issue"),
-                    History = await GetStoryHistoryAsync(areaPaths, adoSprints, "Client Issue")
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "Client Issue")
                 }
             };
         }
@@ -431,5 +449,15 @@ namespace SRMDevOps.Repo
                 .Take(fetchCount)
                 .ToList();
         }
+    }
+
+    public class ParentImpactDto
+    {
+        public int? ParentId { get; set; }
+        public int ImpactedStoriesCount { get; set; }
+        public double TotalPointsImpacted { get; set; }
+        public int MaxSpillageHops { get; set; }
+        public string ParentStatus { get; set; }
+        public DateTime? LatestAssignedDate { get; set; }
     }
 }

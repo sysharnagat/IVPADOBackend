@@ -9,7 +9,10 @@ namespace SRMDevOps.Repo
 
         Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType);
         Task<List<SpillageTrendDto>> GetSpillageTrendAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType);
-        Task<List<StoryHistoryDto>> GetStoryHistoryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null);
+        Task<List<ParentImpactDto>> GetImpactedParentHistoryAsync(
+    List<string> adoAreaPaths,
+    List<SprintDto> adoSprints,
+    string? parentType = null);
         Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints);
 
         Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(string? timeframe,int n,List<string> adoAreaPaths, List<SprintDto> adoSprints);
