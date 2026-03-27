@@ -318,61 +318,85 @@ namespace SRMDevOps.Repo
             return data?.Value.Select(v => v.Identity).ToList() ?? new List<Identity>();
         }
 
-    //    public async Task<List<DeveloperSprintStatsDto>> GetDeveloperSprintMetricsAsync(
-    //string projectId,
-    //string teamId,
-    //string iterationPath,
-    //DateTime sprintEnd)
-    //    {
-    //        // 1. Fetch official team members from ADO
-    //        var members = await GetTeamMembersAsync(projectId, teamId);
-    //        var results = new List<DeveloperSprintStatsDto>();
-    //        var doneStates = new[] { "Closed", "Done", "Completed" };
+        public async Task<ParentDetailDto?> GetWorkItemDetailsAsync(string projectId, int workItemId)
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = GetAuthHeader();
 
-    //        foreach (var member in members)
-    //        {
-    //            // 2. Join the three Task tables
-    //            var memberTasks = await _context.IvpTaskIterations
-    //                .Join(_context.IvpTaskAssignees,
-    //                    ti => ti.TaskId,
-    //                    ta => ta.TaskId,
-    //                    (ti, ta) => new { ti, ta })
-    //                .Join(_context.IvpTaskDetails,
-    //                    combined => combined.ti.TaskId,
-    //                    td => td.TaskId,
-    //                    (combined, td) => new { combined.ti, combined.ta, td })
-    //                .Where(x => x.ti.IterationPath == iterationPath &&
-    //                            x.ta.AssignedTo == member.DisplayName) // Pivot on Developer Name
-    //                .Select(x => new {
-    //                    x.td.TaskId,
-    //                    x.td.DevEffort,
-    //                    x.td.State,
-    //                    x.td.ClosedDate
-    //                })
-    //                .ToListAsync();
+            // The API URL for a specific Work Item ID
+            string url = $"{_baseUrl}/{projectId}/_apis/wit/workitems/{workItemId}?api-version=7.1";
 
-    //            // 3. Calculate metrics based on Sprint End Boundary
-    //            double totalEffortAssigned = memberTasks.Sum(t => t.DevEffort ?? 0);
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return null;
 
-    //            double effortCompletedOnTime = memberTasks
-    //                .Where(t => !string.IsNullOrEmpty(t.State) &&
-    //                            doneStates.Contains(t.State, StringComparer.OrdinalIgnoreCase) &&
-    //                            t.ClosedDate.HasValue && t.ClosedDate.Value.Date <= sprintEnd.Date)
-    //                .Sum(t => t.DevEffort ?? 0);
+            var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+            var fields = json.GetProperty("fields");
 
-    //            results.Add(new DeveloperSprintStatsDto
-    //            {
-    //                DeveloperName = member.DisplayName,
-    //                Email = member.UniqueName,
-    //                EffortAssigned = totalAssigned,
-    //                EffortCompleted = effortCompletedOnTime,
-    //                SpillageEffort = totalEffortAssigned - effortCompletedOnTime,
-    //                TaskCount = memberTasks.Count
-    //            });
-    //        }
+            return new ParentDetailDto
+            {
+                Id = workItemId,
+                // Common ADO Field Reference Names
+                Title = fields.GetProperty("System.Title").GetString() ?? "Unknown",
+                WorkItemType = fields.GetProperty("System.WorkItemType").GetString() ?? "Unknown",
+                State = fields.GetProperty("System.State").GetString() ?? "Unknown"
+            };
+        }
 
-    //        return results;
-    //    }
+        //    public async Task<List<DeveloperSprintStatsDto>> GetDeveloperSprintMetricsAsync(
+        //string projectId,
+        //string teamId,
+        //string iterationPath,
+        //DateTime sprintEnd)
+        //    {
+        //        // 1. Fetch official team members from ADO
+        //        var members = await GetTeamMembersAsync(projectId, teamId);
+        //        var results = new List<DeveloperSprintStatsDto>();
+        //        var doneStates = new[] { "Closed", "Done", "Completed" };
+
+        //        foreach (var member in members)
+        //        {
+        //            // 2. Join the three Task tables
+        //            var memberTasks = await _context.IvpTaskIterations
+        //                .Join(_context.IvpTaskAssignees,
+        //                    ti => ti.TaskId,
+        //                    ta => ta.TaskId,
+        //                    (ti, ta) => new { ti, ta })
+        //                .Join(_context.IvpTaskDetails,
+        //                    combined => combined.ti.TaskId,
+        //                    td => td.TaskId,
+        //                    (combined, td) => new { combined.ti, combined.ta, td })
+        //                .Where(x => x.ti.IterationPath == iterationPath &&
+        //                            x.ta.AssignedTo == member.DisplayName) // Pivot on Developer Name
+        //                .Select(x => new {
+        //                    x.td.TaskId,
+        //                    x.td.DevEffort,
+        //                    x.td.State,
+        //                    x.td.ClosedDate
+        //                })
+        //                .ToListAsync();
+
+        //            // 3. Calculate metrics based on Sprint End Boundary
+        //            double totalEffortAssigned = memberTasks.Sum(t => t.DevEffort ?? 0);
+
+        //            double effortCompletedOnTime = memberTasks
+        //                .Where(t => !string.IsNullOrEmpty(t.State) &&
+        //                            doneStates.Contains(t.State, StringComparer.OrdinalIgnoreCase) &&
+        //                            t.ClosedDate.HasValue && t.ClosedDate.Value.Date <= sprintEnd.Date)
+        //                .Sum(t => t.DevEffort ?? 0);
+
+        //            results.Add(new DeveloperSprintStatsDto
+        //            {
+        //                DeveloperName = member.DisplayName,
+        //                Email = member.UniqueName,
+        //                EffortAssigned = totalAssigned,
+        //                EffortCompleted = effortCompletedOnTime,
+        //                SpillageEffort = totalEffortAssigned - effortCompletedOnTime,
+        //                TaskCount = memberTasks.Count
+        //            });
+        //        }
+
+        //        return results;
+        //    }
     }
 
         public class AzureDevOpsResponse<T>
@@ -433,5 +457,21 @@ namespace SRMDevOps.Repo
         public string State { get; set; }
         public double PointsOrHours { get; set; }
     }
+    public class ParentDetailDto
+    {
+        // The unique ID (e.g., 766823)
+        public int Id { get; set; }
 
+        // The Title from System.Title (e.g., "Perf API - Base Data Load")
+        public string Title { get; set; } = string.Empty;
+
+        // The Work Item Type from System.WorkItemType (e.g., "Feature" or "Client Issue")
+        public string WorkItemType { get; set; } = string.Empty;
+
+        // The current State from System.State (e.g., "In Progress", "Closed")
+        public string State { get; set; } = string.Empty;
+
+        // Optional: The Area Path if you want to verify team ownership
+        public string? AreaPath { get; set; }
+    }
 }
