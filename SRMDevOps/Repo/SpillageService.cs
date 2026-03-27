@@ -119,8 +119,9 @@ namespace SRMDevOps.Repo
             var iterationPaths = sprintDateMap.Keys.ToList();
             var validTypes = new[] { "Feature", "Client Issue" };
 
-            // 1. Fetch raw data ordered by Story and Date as requested
-            var rawData = await _context.IvpUserStoryIterations
+            // 1. Fetch all records for the User Stories that appear in these iterations
+            // Ordering by Story ID and Date as requested for the outer loop
+            var allData = await _context.IvpUserStoryIterations
                 .Join(_context.IvpUserStoryDetails,
                     usi => usi.UserStoryId,
                     usd => usd.UserStoryId,
@@ -142,49 +143,105 @@ namespace SRMDevOps.Repo
                 .ThenBy(x => x.AssignedDate)
                 .ToListAsync();
 
-            // 2. Process foreach Sprint (S1, S2, S3...)
+            // Dictionary to hold our final sprint aggregates
+            var sprintAggregates = iterationPaths.ToDictionary(
+                path => path,
+                path => new { Initial = 0.0, Added = 0.0, Closed = 0.0 }
+            );
+
+            // 2. OUTER LOOP: Group by User Story
+            var groupedByStory = allData.GroupBy(x => x.UserStoryId);
+
+            foreach (var storyGroup in groupedByStory)
+            {
+                // Order the story's history by date once for efficiency
+                var storyHistory = storyGroup.OrderBy(x => x.AssignedDate).ToList();
+
+                foreach (var sprintPath in iterationPaths)
+                {
+                    var dates = sprintDateMap[sprintPath];
+                    var sStart = dates.Start.ToLocalTime();
+                    var sEnd = dates.End.ToLocalTime().Date.AddDays(1).AddTicks(-1);
+                    var nextDayThreshold = dates.End.ToLocalTime().Date.AddDays(1);
+
+                    // --- THE UPDATED "YES/NO" LOGIC ---
+
+                    // 1. Find the specific record where this story was assigned to THIS sprint
+                    var assignmentToThisSprint = storyHistory.FirstOrDefault(us =>
+                        us.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase));
+
+                    if (assignmentToThisSprint == null) continue; // No record for this sprint, "No"
+
+                    var assignedTime = assignmentToThisSprint.AssignedDate.ToLocalTime();
+                    bool isYes = false;
+                    bool isInitial = false;
+
+                    // CASE A: UNPLANNED (Mid-Sprint)
+                    // s1.start < US.assigned_date <= s1.end and s1.iteration = S1
+                    if (assignedTime > sStart && assignedTime <= sEnd)
+                    {
+                        isYes = true;
+                        isInitial = false;
+                    }
+                    // CASE B: PLANNED (Pre-Sprint)
+                    // US.assigned_date <= s1.start and iteration = S1
+                    else if (assignedTime <= sStart)
+                    {
+                        // NEW CHECK: Did someone move it to a different sprint BEFORE S1 started?
+                        // Find if there is ANY record assigned AFTER this one but still BEFORE or ON S1.Start
+                        var reassignedBeforeStart = storyHistory.Any(us =>
+                            us.AssignedDate.ToLocalTime() > assignedTime &&
+                            us.AssignedDate.ToLocalTime() <= sStart &&
+                            !us.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase));
+
+                        if (!reassignedBeforeStart)
+                        {
+                            isYes = true;
+                            isInitial = true;
+                        }
+                        // else: isYes remains false (This handles your u1 example where it moved to s3)
+                    }
+
+                    if (isYes)
+                    {
+                        var points = assignmentToThisSprint.StoryPoints ?? 0;
+                        var current = sprintAggregates[sprintPath];
+
+                        double newInitial = current.Initial + (isInitial ? points : 0);
+                        double newAdded = current.Added + (!isInitial ? points : 0);
+                        double newClosed = current.Closed;
+
+                        // COMPLETED: Only if it was closed by the end of this sprint
+                        if (assignmentToThisSprint.ClosedDate.HasValue &&
+                            assignmentToThisSprint.ClosedDate.Value.ToLocalTime() < nextDayThreshold)
+                        {
+                            newClosed += points;
+                        }
+
+                        sprintAggregates[sprintPath] = new
+                        {
+                            Initial = newInitial,
+                            Added = newAdded,
+                            Closed = newClosed
+                        };
+                    }
+                }
+            }
+
+            // 5. Final Mapping to the AggregatedStat list
             return iterationPaths.Select(path =>
             {
-                if (!sprintDateMap.TryGetValue(path, out var dates))
-                    return new AggregatedStat(path, 0, 0, 0, 0, null);
-
-                // Normalize boundaries
-                var sStartDay = dates.Start.ToLocalTime().Date; // 12:00 AM Day 1
-                var sEndMax = dates.End.ToLocalTime().Date.AddDays(1).AddTicks(-1); // 11:59:59 PM Last Day
-                var nextDayThreshold = dates.End.ToLocalTime().Date.AddDays(1);
-
-                // 1. THE VALID POOL (The "Yes" Logic)
-                // Rule: iteration must match AND assignment must be on or before the sprint end
-                var validStories = rawData
-                    .Where(us => us.IterationPath.Equals(path, StringComparison.OrdinalIgnoreCase) &&
-                                 us.AssignedDate.ToLocalTime() <= sEndMax)
-                    .ToList();
-
-                // 2. PLANNED (Initial): Only stories assigned ON or BEFORE the start day
-                // This handles your "US.assigned_date <= s1.start" requirement
-                var initial = validStories
-                    .Where(x => x.AssignedDate.ToLocalTime().Date <= sStartDay)
-                    .Sum(x => x.StoryPoints ?? 0);
-
-                // 3. UNPLANNED (Added Later): Assigned strictly AFTER Day 1 began
-                // This handles your "s1.start < US.assigned_date <= s1.end" requirement
-                var added = validStories
-                    .Where(x => x.AssignedDate.ToLocalTime().Date > sStartDay)
-                    .Sum(x => x.StoryPoints ?? 0);
-
-                // 4. TOTAL: Strictly the sum of Planned and Unplanned
-                var total = initial + added;
-
-                // 5. COMPLETED: Only those from the valid pool closed by 11:59 PM on the end date
-                var closed = validStories
-                    .Where(x => x.ClosedDate.HasValue &&
-                                x.ClosedDate.Value.ToLocalTime() < nextDayThreshold)
-                    .Sum(x => x.StoryPoints ?? 0);
-
-                return new AggregatedStat(path, total, initial, added, closed, dates.Start);
+                var data = sprintAggregates[path];
+                return new AggregatedStat(
+                    path,
+                    data.Initial + data.Added,
+                    data.Initial,
+                    data.Added,
+                    data.Closed,
+                    sprintDateMap[path].Start
+                );
             }).ToList();
         }
-
         public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null)
         {
             try
