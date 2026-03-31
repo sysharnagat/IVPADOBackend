@@ -410,7 +410,7 @@ namespace SRMDevOps.Repo
                     return new SpillageTrendDto
                     {
                         IterationPath = s.Name,
-                        SpillagePoints = (dbMatch?.Total ?? 0) - (dbMatch?.TotalClosed ?? 0),
+                        SpillagePoints = (dbMatch?.Total ?? 0) - (dbMatch?.ClosedTimely ?? 0),
                         SortDate = s.Attributes.StartDate
                     };
                 })
@@ -508,34 +508,33 @@ namespace SRMDevOps.Repo
         }
         // for monthly/quarterly timeframe
         public async Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(
-            string? timeframe,
-            int n,
-            List<string> adoAreaPaths,
-            List<SprintDto> adoSprints)
+    string? timeframe,
+    int n,
+    List<string> adoAreaPaths,
+    List<SprintDto> adoSprints)
         {
-            // 1. Get the timeframe boundaries
+            // 1. Get the timeframe boundaries (e.g., last 6 months)
             var (unit, bucketMonths, defaultN) = NormalizePeriodUnit(timeframe);
             var periods = n > 0 ? n : defaultN;
             var windowStart = ComputeWindowStart(unit, periods);
 
-            // 2. CRITICAL: Get the "Working" Sprint-wise data first
+            // 2. Fetch the high-precision "Sprint-wise" data first
+            // This uses your working GetAggregatedStatsAsync logic for every individual sprint
             var rawSummary = await GetFullSummaryAsync(adoAreaPaths, adoSprints);
 
-            var result = new SpillageSummaryDto();
-
-            // 3. Helper to group the existing rawSummary sections into months
-            SectionDto AggregateSection(SectionDto rawSection)
+            // 3. Define the aggregator helper
+            SectionDto AggregateByStartTime(SectionDto rawSection)
             {
                 var groupedSection = new SectionDto
                 {
                     Stats = new List<SprintProgressDto>(),
                     Spillage = new List<SpillageTrendDto>(),
-                    History = rawSection.History
+                    History = rawSection.History // Keep original history
                 };
 
                 for (int p = 0; p < periods; p++)
                 {
-                    // 1. Force the bucket to start at exactly 00:00:00 Local
+                    // Define the Month/Quarter bucket boundaries
                     var periodStart = windowStart.AddMonths(p * bucketMonths).Date;
                     var periodEnd = periodStart.AddMonths(bucketMonths);
 
@@ -546,52 +545,136 @@ namespace SRMDevOps.Repo
                         _ => periodStart.ToString("MMM yyyy")
                     };
 
-                    // 2. IMPORTANT: Normalize the sprint date to Local BEFORE comparing
-                    var inBucket = rawSection.Stats
-                    .Where(s => {
-                        if (!s.SortDate.HasValue) return false;
-
-                        // Treat date as Local
-                        var sDate = s.SortDate.Value.Date;
-                        return sDate >= periodStart && sDate < periodEnd;
-                    })
-                    .ToList();
-
-                    var inBucketSpillage = rawSection.Spillage
-                        .Where(s => {
-                            if (!s.SortDate.HasValue) return false;
-                            var sDate = s.SortDate.Value.Date;
-                            return sDate >= periodStart && sDate < periodEnd;
-                        })
+                    // CRITICAL FILTER: Only include sprints that STARTED in this month
+                    var sprintsInThisMonth = rawSection.Stats
+                        .Where(s => s.SortDate.HasValue &&
+                                    s.SortDate.Value.ToLocalTime().Date >= periodStart &&
+                                    s.SortDate.Value.ToLocalTime().Date < periodEnd)
                         .ToList();
 
+                    // Match spillage trends for the same sprints
+                    var spillageInThisMonth = rawSection.Spillage
+                        .Where(s => s.SortDate.HasValue &&
+                                    s.SortDate.Value.ToLocalTime().Date >= periodStart &&
+                                    s.SortDate.Value.ToLocalTime().Date < periodEnd)
+                        .ToList();
+
+                    // Sum up the data for all sprints that started in this month
                     groupedSection.Stats.Add(new SprintProgressDto
                     {
                         IterationPath = label,
-                        TotalPointsAssigned = inBucket.Sum(x => x.TotalPointsAssigned),
-                        MidSprintAddedPoints = inBucket.Sum(x => x.MidSprintAddedPoints),
-                        TotalPointsCompleted = inBucket.Sum(x => x.TotalPointsCompleted),
-                        SortDate = periodStart
+                        SortDate = periodStart,
+                        InitialPoints = sprintsInThisMonth.Sum(x => x.InitialPoints),
+                        MidSprintAddedPoints = sprintsInThisMonth.Sum(x => x.MidSprintAddedPoints),
+                        TotalPointsAssigned = sprintsInThisMonth.Sum(x => x.TotalPointsAssigned),
+                        TotalPointsCompleted = sprintsInThisMonth.Sum(x => x.TotalPointsCompleted),
+                        ClosedTimely = sprintsInThisMonth.Sum(x => x.ClosedTimely),
+                        ClosedLate = sprintsInThisMonth.Sum(x => x.ClosedLate)
                     });
 
                     groupedSection.Spillage.Add(new SpillageTrendDto
                     {
                         IterationPath = label,
-                        SpillagePoints = inBucketSpillage.Sum(x => x.SpillagePoints),
-                        SortDate = periodStart
+                        SortDate = periodStart,
+                        SpillagePoints = spillageInThisMonth.Sum(x => x.SpillagePoints)
                     });
                 }
                 return groupedSection;
             }
 
-            // 4. Map the sections inside the initializer
+            // 4. Return the final summary grouped by Start Date
             return new SpillageSummaryDto
             {
-                All = AggregateSection(rawSummary.All),
-                Feature = AggregateSection(rawSummary.Feature),
-                Client = AggregateSection(rawSummary.Client)
+                All = AggregateByStartTime(rawSummary.All),
+                Feature = AggregateByStartTime(rawSummary.Feature),
+                Client = AggregateByStartTime(rawSummary.Client)
             };
         }
+        //public async Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(
+        //    string? timeframe,
+        //    int n,
+        //    List<string> adoAreaPaths,
+        //    List<SprintDto> adoSprints)
+        //{
+        //    // 1. Get the timeframe boundaries
+        //    var (unit, bucketMonths, defaultN) = NormalizePeriodUnit(timeframe);
+        //    var periods = n > 0 ? n : defaultN;
+        //    var windowStart = ComputeWindowStart(unit, periods);
+
+        //    // 2. CRITICAL: Get the "Working" Sprint-wise data first
+        //    var rawSummary = await GetFullSummaryAsync(adoAreaPaths, adoSprints);
+
+        //    var result = new SpillageSummaryDto();
+
+        //    // 3. Helper to group the existing rawSummary sections into months
+        //    SectionDto AggregateSection(SectionDto rawSection)
+        //    {
+        //        var groupedSection = new SectionDto
+        //        {
+        //            Stats = new List<SprintProgressDto>(),
+        //            Spillage = new List<SpillageTrendDto>(),
+        //            History = rawSection.History
+        //        };
+
+        //        for (int p = 0; p < periods; p++)
+        //        {
+        //            // 1. Force the bucket to start at exactly 00:00:00 Local
+        //            var periodStart = windowStart.AddMonths(p * bucketMonths).Date;
+        //            var periodEnd = periodStart.AddMonths(bucketMonths);
+
+        //            string label = unit switch
+        //            {
+        //                "quarterly" => $"Q{((periodStart.Month - 1) / 3) + 1} {periodStart:yyyy}",
+        //                "yearly" => periodStart.ToString("yyyy"),
+        //                _ => periodStart.ToString("MMM yyyy")
+        //            };
+
+        //            // 2. IMPORTANT: Normalize the sprint date to Local BEFORE comparing
+        //            var inBucket = rawSection.Stats
+        //            .Where(s => {
+        //                if (!s.SortDate.HasValue) return false;
+
+        //                // Treat date as Local
+        //                var sDate = s.SortDate.Value.Date;
+        //                return sDate >= periodStart && sDate < periodEnd;
+        //            })
+        //            .ToList();
+
+        //            var inBucketSpillage = rawSection.Spillage
+        //                .Where(s => {
+        //                    if (!s.SortDate.HasValue) return false;
+        //                    var sDate = s.SortDate.Value.Date;
+        //                    return sDate >= periodStart && sDate < periodEnd;
+        //                })
+        //                .ToList();
+
+        //            groupedSection.Stats.Add(new SprintProgressDto
+        //            {
+        //                IterationPath = label,
+        //                TotalPointsAssigned = inBucket.Sum(x => x.TotalPointsAssigned),
+        //                MidSprintAddedPoints = inBucket.Sum(x => x.MidSprintAddedPoints),
+        //                TotalPointsCompleted = inBucket.Sum(x => x.TotalPointsCompleted),
+        //                SortDate = periodStart
+        //            });
+
+        //            groupedSection.Spillage.Add(new SpillageTrendDto
+        //            {
+        //                IterationPath = label,
+        //                SpillagePoints = inBucketSpillage.Sum(x => x.SpillagePoints),
+        //                SortDate = periodStart
+        //            });
+        //        }
+        //        return groupedSection;
+        //    }
+
+        //    // 4. Map the sections inside the initializer
+        //    return new SpillageSummaryDto
+        //    {
+        //        All = AggregateSection(rawSummary.All),
+        //        Feature = AggregateSection(rawSummary.Feature),
+        //        Client = AggregateSection(rawSummary.Client)
+        //    };
+        //}
 
         private (string unit, int bucketMonths, int defaultN) NormalizePeriodUnit(string? unit)
         {
@@ -672,7 +755,7 @@ namespace SRMDevOps.Repo
             int multiplier = t switch
             {
                 var x when x.Contains("year") => 30,
-                var x when x.Contains("quarter") => 8,
+                var x when x.Contains("quarter") => 10,
                 _ => 4// Monthly needs ~3, Sprint-wise needs enough to cover the 'n'
             };
 
@@ -684,7 +767,7 @@ namespace SRMDevOps.Repo
             // This removes the "30 Mar - 17 Apr" sprint from the top
             return allSprints
                 .Where(s => s.Attributes.StartDate.HasValue &&
-                            s.Attributes.StartDate.Value.ToLocalTime() <= DateTime.Now)
+                            s.Attributes.StartDate.Value.ToLocalTime() <= DateTime.Now.Date)
                 .OrderByDescending(s => s.Attributes.StartDate)
                 .ToList(); // Return the whole valid list; let the Controller 'Take(n)'
         }
