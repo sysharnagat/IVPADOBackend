@@ -21,8 +21,15 @@ namespace SRMDevOps.Repo
         }
 
         // Private aggregate holder to return from in-memory mapping
-        private sealed record AggregatedStat(string FullPath, double Total, double initialPoints,double AddedLater, double Closed,
-                 DateTime? SortDate);
+        private sealed record AggregatedStat(
+            string FullPath,
+            double Total,
+            double InitialPoints,
+            double AddedLater,
+            double TotalClosed,
+            double ClosedTimely,
+            double ClosedLate,
+            DateTime? SortDate);
 
         /// <summary>
         /// Internal DB Aggregator: Only returns data for iterations that exist in the DB.
@@ -119,18 +126,17 @@ namespace SRMDevOps.Repo
             var iterationPaths = sprintDateMap.Keys.ToList();
             var validTypes = new[] { "Feature", "Client Issue" };
 
-            // 1. Fetch all records
+            // 1. Fetch data
             var allData = await _context.IvpUserStoryIterations
                 .Join(_context.IvpUserStoryDetails,
                     usi => usi.UserStoryId,
                     usd => usd.UserStoryId,
                     (usi, usd) => new { usi, usd })
                 .Where(c => iterationPaths.Contains(c.usi.IterationPath) &&
-                            adoAreaPaths.Contains(c.usd.AreaPath) &&
-                            c.usd.ParentType != null)
+                            adoAreaPaths.Contains(c.usd.AreaPath))
                 .Where(c => (string.IsNullOrEmpty(parentType) || parentType.ToLower() == "all")
-                            ? validTypes.Contains(c.usd.ParentType)
-                            : c.usd.ParentType.ToLower() == parentType.ToLower())
+                            ? (c.usd.ParentType != null && validTypes.Contains(c.usd.ParentType))
+                            : (c.usd.ParentType != null && c.usd.ParentType.ToLower() == parentType.ToLower()))
                 .Select(x => new
                 {
                     x.usi.UserStoryId,
@@ -143,88 +149,93 @@ namespace SRMDevOps.Repo
                 .ThenBy(x => x.AssignedDate)
                 .ToListAsync();
 
+            // Updated dictionary to hold Timely vs Late
             var sprintAggregates = iterationPaths.ToDictionary(
                 path => path,
-                path => new { Initial = 0.0, Added = 0.0, Closed = 0.0 }
+                path => new { Initial = 0.0, Added = 0.0, CompletedTimely = 0.0, CompletedLate = 0.0 }
             );
 
-            // 2. Group by User Story
-            var groupedByStory = allData.GroupBy(x => x.UserStoryId);
-
-            foreach (var storyGroup in groupedByStory)
+            foreach (var storyGroup in allData.GroupBy(x => x.UserStoryId))
             {
                 var storyHistory = storyGroup.OrderBy(x => x.AssignedDate).ToList();
-                int storyId = storyGroup.Key;
 
                 foreach (var sprintPath in iterationPaths)
                 {
                     var dates = sprintDateMap[sprintPath];
-                    var sStart = dates.Start.ToLocalTime().Date;
-                    var sPlanningGraceEnd = sStart.AddDays(1).AddTicks(-1);
+                    var sStart = dates.Start.ToLocalTime().Date; // 12:00 AM Cutoff
                     var sEndMax = dates.End.ToLocalTime().Date.AddDays(1).AddTicks(-1);
 
-                    // 1. Get state at the end of the Planning Window (Day 1)
+                    // Membership Check
                     var stateAtPlanningEnd = storyHistory
-                        .Where(us => us.AssignedDate.ToLocalTime() <= sPlanningGraceEnd)
+                        .Where(us => us.AssignedDate.ToLocalTime() <= sStart)
                         .OrderByDescending(us => us.AssignedDate)
                         .FirstOrDefault();
 
-                    // 2. Check for Mid-Sprint Additions
-                    bool addedMidSprint = storyHistory.Any(us =>
-                        us.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase) &&
-                        us.AssignedDate.ToLocalTime() > sPlanningGraceEnd &&
-                        us.AssignedDate.ToLocalTime() <= sEndMax);
-
-                    // Decision Logic
                     bool isInitial = stateAtPlanningEnd != null &&
                                      stateAtPlanningEnd.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase);
 
-                    bool isYes = isInitial || addedMidSprint;
+                    bool addedMidSprint = storyHistory.Any(us =>
+                        us.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase) &&
+                        us.AssignedDate.ToLocalTime() > sStart &&
+                        us.AssignedDate.ToLocalTime() <= sEndMax);
 
-                    if (!isYes) continue;
+                    if (!(isInitial || addedMidSprint)) continue;
 
-                    // --- CONSOLE LOGGING START ---
-                    if (isInitial && sprintPath.Equals("IVP-SRM\\SPRINT 15 Dec - 02 Jan 2026"))
-                    {
-                        // This will list every ID contributing to your 278 Initial Points
-                        Console.WriteLine($"Sprint: {sprintPath} | Planned Story ID: {storyId}");
-                    }
-                    // --- CONSOLE LOGGING END ---
+                    // --- COMPLETION LOGIC ---
+                    // Get the absolute latest record for this story across all history to check current status
+                    var absoluteLatest = storyHistory.LastOrDefault();
 
-                    // 3. Completion Check (Strict)
+                    // Get the latest record WITHIN this specific sprint window
                     var latestInWindow = storyHistory
                         .Where(us => us.AssignedDate.ToLocalTime() <= sEndMax)
                         .OrderByDescending(us => us.AssignedDate)
                         .FirstOrDefault();
 
-                    bool isClosed = latestInWindow != null &&
-                                    latestInWindow.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase) &&
-                                    latestInWindow.ClosedDate.HasValue &&
-                                    latestInWindow.ClosedDate.Value.ToLocalTime() <= sEndMax;
+                    double points = latestInWindow?.StoryPoints ?? 0;
+                    bool isClosedTimely = false;
+                    bool isClosedLate = false;
 
-                    var points = latestInWindow?.StoryPoints ?? 0;
+                    if (latestInWindow != null && latestInWindow.ClosedDate.HasValue)
+                    {
+                        var closedTime = latestInWindow.ClosedDate.Value.ToLocalTime();
+
+                        // 1. Completed Timely: Closed within the sprint dates
+                        if (closedTime >= sStart && closedTime <= sEndMax)
+                        {
+                            isClosedTimely = true;
+                        }
+                        // 2. Completed Late: Closed after sprint end, but the story was NEVER moved to a new sprint
+                        else if (closedTime > sEndMax && absoluteLatest != null &&
+                                 absoluteLatest.IterationPath.Equals(sprintPath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            isClosedLate = true;
+                        }
+                    }
+
                     var current = sprintAggregates[sprintPath];
-
                     sprintAggregates[sprintPath] = new
                     {
                         Initial = current.Initial + (isInitial ? points : 0),
                         Added = current.Added + (!isInitial ? points : 0),
-                        Closed = current.Closed + (isClosed ? points : 0)
+                        CompletedTimely = current.CompletedTimely + (isClosedTimely ? points : 0),
+                        CompletedLate = current.CompletedLate + (isClosedLate ? points : 0)
                     };
                 }
             }
 
-            // 5. Final Mapping
+            // Map to your Final DTO
             return iterationPaths.Select(path =>
             {
                 var data = sprintAggregates[path];
                 return new AggregatedStat(
                     path,
-                    data.Initial + data.Added,
-                    data.Initial,
-                    data.Added,
-                    data.Closed,
-                    sprintDateMap[path].Start
+                    data.Initial + data.Added,           // Total
+                    data.Initial,                        // initialPoints
+                    data.Added,                          // AddedLater
+                    data.CompletedTimely + data.CompletedLate, // TotalClosed (Sum of both)
+                    data.CompletedTimely,                // ClosedTimely
+                    data.CompletedLate,                  // ClosedLate
+                    sprintDateMap[path].Start            // SortDate
                 );
             }).ToList();
         }
@@ -348,14 +359,24 @@ namespace SRMDevOps.Repo
 
                 // FIX: Map against the FULL list of ADO Sprints so empty ones show up as 0
                 return adoSprints.Select(s => {
+                    // dbMatch is an 'AggregatedStat' record
                     var dbMatch = aggregated.FirstOrDefault(a => a.FullPath.Equals(s.Path, StringComparison.OrdinalIgnoreCase));
+
                     return new SprintProgressDto
                     {
                         IterationPath = s.Name,
                         TotalPointsAssigned = dbMatch?.Total ?? 0,
-                        InitialPoints = dbMatch?.initialPoints ?? 0,
+
+                        InitialPoints = dbMatch?.InitialPoints ?? 0,
+
                         MidSprintAddedPoints = dbMatch?.AddedLater ?? 0,
-                        TotalPointsCompleted = dbMatch?.Closed ?? 0,
+
+                        TotalPointsCompleted = dbMatch?.TotalClosed ?? 0,
+
+                        // NEW: You can now pass these to your DTO if you updated it
+                        ClosedTimely = dbMatch?.ClosedTimely ?? 0,
+                        ClosedLate = dbMatch?.ClosedLate ?? 0,
+
                         SortDate = s.Attributes.StartDate
                     };
                 })
@@ -389,7 +410,7 @@ namespace SRMDevOps.Repo
                     return new SpillageTrendDto
                     {
                         IterationPath = s.Name,
-                        SpillagePoints = (dbMatch?.Total ?? 0) - (dbMatch?.Closed ?? 0),
+                        SpillagePoints = (dbMatch?.Total ?? 0) - (dbMatch?.TotalClosed ?? 0),
                         SortDate = s.Attributes.StartDate
                     };
                 })

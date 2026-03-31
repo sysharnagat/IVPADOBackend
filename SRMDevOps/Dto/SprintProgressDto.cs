@@ -7,6 +7,8 @@
         public double InitialPoints { get; set; }
         public double MidSprintAddedPoints { get; set; }
         public double TotalPointsCompleted { get; set; }
+        public double ClosedTimely { get; set; }
+        public double ClosedLate { get; set; }
         public DateTime? SortDate { get; set; }
     }
 }
