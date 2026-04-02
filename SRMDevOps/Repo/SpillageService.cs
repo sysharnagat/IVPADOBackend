@@ -527,10 +527,12 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                 return new List<SpillageTrendDto>();
             }
         }
+        // Inside SpillageService.cs
         public async Task<List<ParentImpactDto>> GetImpactedParentHistoryAsync(
-    List<string> adoAreaPaths,
-    List<SprintDto> adoSprints,
-    string? parentType = null)
+            List<string> adoAreaPaths,
+            List<SprintDto> adoSprints,
+            Dictionary<int, string> titleMap,
+            string? parentType = null) // Added projectId to pass to API
         {
             try
             {
@@ -538,7 +540,6 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
 
                 var sprintPaths = adoSprints.Select(s => s.Path).ToList();
 
-                // 1. Get stories and their details within the SPECIFIC sprint window
                 var storiesInSprints = await _context.IvpUserStoryIterations
                     .Join(_context.IvpUserStoryDetails,
                         usi => usi.UserStoryId,
@@ -561,46 +562,42 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
 
                 if (!storiesInSprints.Any()) return new List<ParentImpactDto>();
 
-                // 2. Calculate transitions ONLY within the provided adoSprints (Day 0 Logic)
                 var transitionMap = storiesInSprints
                     .GroupBy(h => h.UserStoryId)
                     .ToDictionary(
                         g => g.Key,
                         g => {
-                            // Sort by date to establish the "Day 0" baseline
                             var list = g.OrderBy(x => x.AssignedDate).ToList();
                             int transitions = 0;
-
-                            // We start from the second appearance (i=1)
-                            // The first appearance (i=0) is our "Fresh Start" baseline
                             for (int i = 1; i < list.Count; i++)
                             {
                                 if (!list[i].IterationPath.Equals(list[i - 1].IterationPath, StringComparison.OrdinalIgnoreCase))
-                                {
                                     transitions++;
-                                }
                             }
                             return transitions;
                         });
 
-                // 3. Final aggregation by ParentId
-                return storiesInSprints
-                    .GroupBy(s => s.ParentId)
-                    .Select(g => {
-                        var uniqueStoryIds = g.Select(x => x.UserStoryId).Distinct().ToList();
+                // 3. Aggregate by Parent and Fetch Titles from ADO
+                // 3. Aggregate by Parent and Fetch Titles from ADO
+                var parentGroups = storiesInSprints.GroupBy(s => s.ParentId).ToList();
+                var impactResults = new List<ParentImpactDto>();
 
-                        int totalImpactScore = uniqueStoryIds.Sum(id => transitionMap.GetValueOrDefault(id, 0));
+                // CACHE: Prevents duplicate API calls for the same ParentId
+                var titleCache = new Dictionary<int, string>();
 
-                        return new ParentImpactDto
-                        {
-                            ParentId = g.Key,
-                            ParentStatus = g.Any(s => s.State == "In Progress") ? "In Progress" : g.First().State,
-                            TotalStoryCount = uniqueStoryIds.Count,
-                            TotalImpactScore = totalImpactScore
-                        };
-                    })
-                    .OrderByDescending(r => r.TotalImpactScore)
-                    .ToList();
+                foreach (var g in parentGroups)
+                {
+                    int pId = g.Key.Value;
+                    impactResults.Add(new ParentImpactDto
+                    {
+                        ParentId = pId,
+                        ParentTitle = titleMap.GetValueOrDefault(pId, $"ID #{pId}"), // Instant lookup
+                        ParentStatus = g.Any(s => s.State == "In Progress") ? "In Progress" : g.First().State,
+                        TotalStoryCount = g.Select(x => x.UserStoryId).Distinct().Count(),
+                        TotalImpactScore = g.Select(x => x.UserStoryId).Distinct().Sum(id => transitionMap[id])
+                    });
+                }
+                return impactResults.OrderByDescending(r => r.TotalImpactScore).ToList();
             }
             catch (Exception e)
             {
@@ -675,6 +672,7 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
             int n,
             List<string> adoAreaPaths,
             List<SprintDto> adoSprints,
+            string projectId,
             bool isTask = false)
         {
             // 1. Get the timeframe boundaries (e.g., last 6 months)
@@ -684,7 +682,7 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
 
             // 2. Fetch the high-precision "Sprint-wise" data first
             // This uses your working GetAggregatedStatsAsync logic for every individual sprint
-            var rawSummary = await GetFullSummaryAsync(adoAreaPaths, adoSprints, isTask);
+            var rawSummary = await GetFullSummaryAsync(adoAreaPaths, adoSprints, projectId, isTask);
 
             // 3. Define the aggregator helper
             SectionDto AggregateByStartTime(SectionDto rawSection)
@@ -777,12 +775,28 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                         .AddMonths(-((nPeriods * bucketMonths) - 1));
         }
 
-        public async Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> areaPaths, List<SprintDto> adoSprints, bool isTask = false)
+        public async Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> areaPaths, List<SprintDto> adoSprints, string projectId, bool isTask = false)
         {
             var dateMap = adoSprints.ToDictionary(
                 s => s.Path,
                 s => (s.Attributes.StartDate.Value, s.Attributes.FinishDate.Value),
                 StringComparer.OrdinalIgnoreCase);
+
+            var sprintPaths = adoSprints.Select(s => s.Path).ToList();
+
+            // 1. Find every unique ParentId that appears in these sprints
+            var allParentIds = await _context.IvpUserStoryIterations
+                .Join(_context.IvpUserStoryDetails, usi => usi.UserStoryId, usd => usd.UserStoryId, (usi, usd) => usd)
+                .Where(usd => areaPaths.Contains(usd.AreaPath) && usd.ParentId != null)
+                .Select(usd => usd.ParentId.Value)
+                .Distinct()
+                .ToListAsync();
+
+            // 2. Fetch all titles in ONE single API call
+            // 2. Fetch all titles in ONE single API call
+            Console.WriteLine($"[DEBUG] Fetching titles for {allParentIds.Count} parents using Project: {projectId}");
+            var titleMap = await _devops.GetWorkItemTitlesBatchAsync(projectId, allParentIds);
+            Console.WriteLine($"[DEBUG] Successfully mapped {titleMap.Count} titles.");
 
             return new SpillageSummaryDto
             {
@@ -790,7 +804,7 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "all", isTask),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "all", isTask),
-                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "all"),
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, titleMap, "all"),
                     // FIX: Pass isTask here
                     DailyTrends = await GetDailyTrendStatsAsync(areaPaths, dateMap, "all", isTask)
                 },
@@ -798,7 +812,7 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Feature", isTask),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Feature", isTask),
-                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "Feature"),
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, titleMap, "Feature"),
                     // FIX: Pass isTask here
                     DailyTrends = await GetDailyTrendStatsAsync(areaPaths, dateMap, "Feature", isTask)
                 },
@@ -806,7 +820,7 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                 {
                     Stats = await GetSprintStatsAsync(areaPaths, adoSprints, "Client Issue", isTask),
                     Spillage = await GetSpillageTrendAsync(areaPaths, adoSprints, "Client Issue", isTask),
-                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, "Client Issue"),
+                    History = await GetImpactedParentHistoryAsync(areaPaths, adoSprints, titleMap, "Client Issue"),
                     // FIX: Pass isTask here
                     DailyTrends = await GetDailyTrendStatsAsync(areaPaths, dateMap, "Client Issue", isTask)
                 }
@@ -874,12 +888,14 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
         public DateTime? ClosedDate { get; set; }
     }
 
+    // Inside SpillageService.cs or your Dto file
     public class ParentImpactDto
     {
         public int? ParentId { get; set; }
+        public string? ParentTitle { get; set; } // NEW: Added for ADO Title
         public string ParentStatus { get; set; }
-        public int TotalStoryCount { get; set; } // Total unique stories under this feature
-        public int TotalImpactScore { get; set; } // Sum of all child story transitions
+        public int TotalStoryCount { get; set; }
+        public int TotalImpactScore { get; set; }
     }
 
     public class StoryUpdateRow

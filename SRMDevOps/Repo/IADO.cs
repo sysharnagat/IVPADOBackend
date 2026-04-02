@@ -20,6 +20,7 @@ namespace SRMDevOps.Repo
         //int n);
 
         Task<List<Identity>> GetTeamMembersAsync(string projectId, string teamId);
+        Task<Dictionary<int, string>> GetWorkItemTitlesBatchAsync(string projectId, List<int> ids);
 
         //public Task<string> GetTeamsInProject(string projectName);
         //public Task<TeamFieldValuesDto> GetTeamAreaPaths(string projectName, string teamName);

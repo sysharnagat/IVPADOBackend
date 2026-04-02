@@ -318,28 +318,45 @@ namespace SRMDevOps.Repo
             return data?.Value.Select(v => v.Identity).ToList() ?? new List<Identity>();
         }
 
-        public async Task<ParentDetailDto?> GetWorkItemDetailsAsync(string projectId, int workItemId)
+        // Inside DevopsService.cs
+        public async Task<Dictionary<int, string>> GetWorkItemTitlesBatchAsync(string projectId, List<int> ids)
         {
+            var distinctIds = ids.Distinct().ToList();
+            if (!distinctIds.Any()) return new Dictionary<int, string>();
+
+            var titleMap = new Dictionary<int, string>();
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = GetAuthHeader();
 
-            // The API URL for a specific Work Item ID
-            string url = $"{_baseUrl}/{projectId}/_apis/wit/workitems/{workItemId}?api-version=7.1";
-
-            var response = await client.GetAsync(url);
-            if (!response.IsSuccessStatusCode) return null;
-
-            var json = await response.Content.ReadFromJsonAsync<JsonElement>();
-            var fields = json.GetProperty("fields");
-
-            return new ParentDetailDto
+            // CHUNK LOGIC: Split 500 IDs into 200 + 200 + 100
+            for (int i = 0; i < distinctIds.Count; i += 200)
             {
-                Id = workItemId,
-                // Common ADO Field Reference Names
-                Title = fields.GetProperty("System.Title").GetString() ?? "Unknown",
-                WorkItemType = fields.GetProperty("System.WorkItemType").GetString() ?? "Unknown",
-                State = fields.GetProperty("System.State").GetString() ?? "Unknown"
-            };
+                var chunk = distinctIds.Skip(i).Take(200).ToList();
+                string url = $"{_baseUrl}/{projectId}/_apis/wit/workitemsbatch?api-version=7.1";
+
+                var requestBody = new { ids = chunk, fields = new[] { "System.Title" } };
+                var response = await client.PostAsJsonAsync(url, requestBody);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+                    if (json.TryGetProperty("value", out var valueArray))
+                    {
+                        foreach (var item in valueArray.EnumerateArray())
+                        {
+                            int id = item.GetProperty("id").GetInt32();
+                            string title = item.GetProperty("fields").GetProperty("System.Title").GetString() ?? "No Title";
+                            titleMap[id] = title;
+                        }
+                    }
+                }
+                else
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"Chunk Error: {error}");
+                }
+            }
+            return titleMap;
         }
 
         //    public async Task<List<DeveloperSprintStatsDto>> GetDeveloperSprintMetricsAsync(

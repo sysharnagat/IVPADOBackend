@@ -50,12 +50,12 @@ namespace SRMDevOps.Controllers
                 // This ensures if n=6, you get 6 sprints that have actually started.
                 var sprintwiseList = validSprints.Take(n).ToList();
 
-                var results = await _spillage.GetFullSummaryAsync(areaPaths, sprintwiseList, isTask);
+                var results = await _spillage.GetFullSummaryAsync(areaPaths, sprintwiseList, projectId, isTask);
                 return Ok(results);
             }
 
             // Monthly/Quarterly logic
-            var result = await _spillage.GetAggregatedTeamStatsAsync(timeframe, n, areaPaths, validSprints, isTask);
+            var result = await _spillage.GetAggregatedTeamStatsAsync(timeframe, n, areaPaths, validSprints, projectId, isTask);
             return Ok(result ?? new SpillageSummaryDto());
         }
 

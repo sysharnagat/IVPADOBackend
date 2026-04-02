@@ -9,10 +9,9 @@ namespace SRMDevOps.Repo
 
         Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType, bool isTask = false);
         Task<List<SpillageTrendDto>> GetSpillageTrendAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType, bool isTask = false);
-        Task<List<ParentImpactDto>> GetImpactedParentHistoryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string? parentType = null);
-        Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, bool isTask = false);
+        Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> adoAreaPaths, List<SprintDto> adoSprints, string projectId, bool isTask = false);
 
-        Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(string? timeframe,int n,List<string> adoAreaPaths, List<SprintDto> adoSprints, bool isTask = false);
+        Task<SpillageSummaryDto> GetAggregatedTeamStatsAsync(string? timeframe,int n,List<string> adoAreaPaths, List<SprintDto> adoSprints, string projectId, bool isTask = false);
 
         Task<List<SprintDto>> GetSprintsForTimeframeAsync(string projectId, string teamId, string? timeframe, int n);
 
