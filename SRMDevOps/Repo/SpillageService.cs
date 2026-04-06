@@ -592,7 +592,11 @@ public async Task<List<SprintProgressDto>> GetSprintStatsAsync(List<string> adoA
                     {
                         ParentId = pId,
                         ParentTitle = titleMap.GetValueOrDefault(pId, $"ID #{pId}"), // Instant lookup
-                        ParentStatus = g.Any(s => s.State == "In Progress") ? "In Progress" : g.First().State,
+                        ParentStatus = g.Any(s => s.State == "In Progress") ? "In Progress" :
+                                       g.Any(s => s.State == "New") ? "In Progress" :
+                                       g.Any(s => s.State == "Pending QA Ready Validation") ? "In Progress" :
+                                       g.All(s => s.State == "Closed") ? "Closed" :
+                                       g.First().State,
                         TotalStoryCount = g.Select(x => x.UserStoryId).Distinct().Count(),
                         TotalImpactScore = g.Select(x => x.UserStoryId).Distinct().Sum(id => transitionMap[id])
                     });
