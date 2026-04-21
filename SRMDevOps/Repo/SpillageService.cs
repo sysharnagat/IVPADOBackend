@@ -567,94 +567,82 @@ namespace SRMDevOps.Repo
             // 3. Define the aggregator helper
             SectionDto AggregateByStartTime(SectionDto rawSection)
             {
-                var groupedSection = new SectionDto
+                var windowStart = ComputeWindowStart(unit, periods);
+
+                // 1. Helper to calculate the constant label (e.g., "Q1 2026")
+                string GetLabel(DateTime date) => unit switch
                 {
-                    Stats = new List<SprintProgressDto>(),
-                    Spillage = new List<SpillageTrendDto>(),
-                    History = rawSection.History // Keep original history
+                    "quarterly" => $"Q{((date.Month - 1) / 3) + 1} {date:yyyy}",
+                    "yearly" => date.ToString("yyyy"),
+                    _ => date.ToString("MMM yyyy")
                 };
 
-                for (int p = 0; p < periods; p++)
+                // 2. Filter data first to respect the "Show last X" window
+                var statsFiltered = rawSection.Stats.Where(s => s.SortDate >= windowStart).ToList();
+                var spillageFiltered = rawSection.Spillage.Where(s => s.SortDate >= windowStart).ToList();
+                var devFiltered = rawSection.DeveloperStats.Where(ds => {
+                    var sprint = adoSprints.FirstOrDefault(s => s.Path.Equals(ds.Sprint, StringComparison.OrdinalIgnoreCase));
+                    return sprint?.Attributes?.StartDate >= windowStart;
+                }).ToList();
+                var effortFiltered = rawSection.EffortVariance.Where(ev => ev.SortDate >= windowStart).ToList();
+
+                // 3. Group and Aggregate
+                return new SectionDto
                 {
-                    // Define the Month/Quarter bucket boundaries
-                    var periodStart = windowStart.AddMonths(p * bucketMonths).Date;
-                    var periodEnd = periodStart.AddMonths(bucketMonths);
+                    History = rawSection.History,
+        
+                    Stats = statsFiltered.GroupBy(s => GetLabel(s.SortDate.Value))
+                        .Select(g => new SprintProgressDto {
+                            IterationPath = g.Key,
+                            SortDate = g.Min(x => x.SortDate),
+                            InitialPoints = g.Sum(x => x.InitialPoints),
+                            MidSprintAddedPoints = g.Sum(x => x.MidSprintAddedPoints),
+                            TotalPointsAssigned = g.Sum(x => x.TotalPointsAssigned),
+                            TotalPointsCompleted = g.Sum(x => x.TotalPointsCompleted),
+                            ClosedTimely = g.Sum(x => x.ClosedTimely),
+                            ClosedLate = g.Sum(x => x.ClosedLate)
+                        }).OrderBy(x => x.SortDate).ToList(),
 
-                    string label = unit switch
-                    {
-                        "quarterly" => $"Q{((periodStart.Month - 1) / 3) + 1} {periodStart:yyyy}",
-                        "yearly" => periodStart.ToString("yyyy"),
-                        _ => periodStart.ToString("MMM yyyy")
-                    };
+                    Spillage = spillageFiltered.GroupBy(s => GetLabel(s.SortDate.Value))
+                        .Select(g => new SpillageTrendDto {
+                            IterationPath = g.Key,
+                            SortDate = g.Min(x => x.SortDate),
+                            SpillagePoints = g.Sum(x => x.SpillagePoints)
+                        }).OrderBy(x => x.SortDate).ToList(),
 
-                    // CRITICAL FILTER: Only include sprints that STARTED in this month
-                    var sprintsInThisMonth = rawSection.Stats
-                        .Where(s => s.SortDate.HasValue &&
-                                    s.SortDate.Value.ToLocalTime().Date >= periodStart &&
-                                    s.SortDate.Value.ToLocalTime().Date < periodEnd)
-                        .ToList();
+                    DeveloperStats = devFiltered.GroupBy(ds => new { Label = GetLabel(adoSprints.First(s => s.Path.Equals(ds.Sprint, StringComparison.OrdinalIgnoreCase)).Attributes.StartDate.Value), ds.Developer })
+                        .Select(g => new DeveloperSprintStatDto {
+                            Sprint = g.Key.Label,
+                            Developer = g.Key.Developer,
+                            TotalTasksAssigned = g.Sum(x => x.TotalTasksAssigned),
+                            TotalTasksCompleted = g.Sum(x => x.TotalTasksCompleted),
+                            TotalHours = g.Sum(x => x.TotalHours)
+                        }).ToList(),
 
-                    // Match spillage trends for the same sprints
-                    var spillageInThisMonth = rawSection.Spillage
-                        .Where(s => s.SortDate.HasValue &&
-                                    s.SortDate.Value.ToLocalTime().Date >= periodStart &&
-                                    s.SortDate.Value.ToLocalTime().Date < periodEnd)
-                        .ToList();
-                    var devStatsInThisPeriod = rawSection.DeveloperStats
-             .Where(ds => {
-                 // Find the sprint to get its actual start date for correct bucketing
-                 var sprint = adoSprints.FirstOrDefault(s =>
-                     s.Path.Equals(ds.Sprint, StringComparison.OrdinalIgnoreCase));
-
-                 var sprintStart = sprint?.Attributes?.StartDate?.ToLocalTime().Date;
-                 return sprintStart.HasValue &&
-                        sprintStart >= periodStart &&
-                        sprintStart < periodEnd;
-             })
-             .GroupBy(ds => ds.Developer) // Group by Dev Name to combine their work in multiple sprints
-             .Select(g => new DeveloperSprintStatDto
-             {
-                 Sprint = label, // Assign the period label (e.g., "Jan 2026")
-                 Developer = g.Key,
-                 TotalTasksAssigned = g.Sum(x => x.TotalTasksAssigned),
-                 TotalTasksCompleted = g.Sum(x => x.TotalTasksCompleted),
-                 TotalHours = g.Sum(x => x.TotalHours)
-             })
-             .ToList();
-
-
-                    groupedSection.DeveloperStats.AddRange(devStatsInThisPeriod);
-
-                    // Sum up the data for all sprints that started in this month
-                    groupedSection.Stats.Add(new SprintProgressDto
-                    {
-                        IterationPath = label,
-                        SortDate = periodStart,
-                        InitialPoints = sprintsInThisMonth.Sum(x => x.InitialPoints),
-                        MidSprintAddedPoints = sprintsInThisMonth.Sum(x => x.MidSprintAddedPoints),
-                        TotalPointsAssigned = sprintsInThisMonth.Sum(x => x.TotalPointsAssigned),
-                        TotalPointsCompleted = sprintsInThisMonth.Sum(x => x.TotalPointsCompleted),
-                        ClosedTimely = sprintsInThisMonth.Sum(x => x.ClosedTimely),
-                        ClosedLate = sprintsInThisMonth.Sum(x => x.ClosedLate)
-                    });
-
-                    groupedSection.Spillage.Add(new SpillageTrendDto
-                    {
-                        IterationPath = label,
-                        SortDate = periodStart,
-                        SpillagePoints = spillageInThisMonth.Sum(x => x.SpillagePoints)
-                    });
-                }
-                return groupedSection;
-            }
-
-            // 4. Return the final summary grouped by Start Date
-            return new SpillageSummaryDto
-            {
-                All = AggregateByStartTime(rawSummary.All),
-                Feature = AggregateByStartTime(rawSummary.Feature),
-                Client = AggregateByStartTime(rawSummary.Client)
-            };
+                    EffortVariance = effortFiltered
+                        .GroupBy(ev => new {
+                            Label = GetLabel(ev.SortDate.Value),
+                            ev.Developer
+                        })
+                        .Select(g => new EffortVarianceDto
+                        {
+                            Sprint = g.Key.Label,          // Period label (e.g., "Q1 2026")
+                            Developer = g.Key.Developer,   // Developer name
+                            CommittedEffort = g.Sum(x => x.CommittedEffort),
+                            ActualEffort = g.Sum(x => x.ActualEffort),
+                            SortDate = g.Min(x => x.SortDate)
+                        })
+                        .OrderBy(x => x.SortDate)
+                        .ToList(),
+                        };
+                    }
+                        // 4. Return the final summary grouped by Start Date
+                            return new SpillageSummaryDto
+                            {
+                                All = AggregateByStartTime(rawSummary.All),
+                                Feature = AggregateByStartTime(rawSummary.Feature),
+                                Client = AggregateByStartTime(rawSummary.Client)
+                            };
         }
         
 
@@ -670,38 +658,31 @@ namespace SRMDevOps.Repo
         }
         private DateTime ComputeWindowStart(string unit, int nPeriods)
         {
-            var now = DateTime.Now; // Local time
+            // Use a consistent base date (e.g., First of current month)
+            var now = DateTime.Now;
+            var baseDate = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Local);
 
-            if (unit == "yearly")
+            int bucketMonths = unit switch
             {
-                // Calendar-year buckets: start at Jan 1 of (currentYear - nPeriods + 1)
-                var startYear = now.Year - (nPeriods - 1);
-                return new DateTime(startYear, 1, 1, 0, 0, 0, DateTimeKind.Local);
-            }
+                "quarterly" => 3,
+                "yearly" => 12,
+                _ => 1 // monthly
+            };
 
+            // Calculate total months to look back
+            int totalMonths = nPeriods * bucketMonths;
+
+            // Calculate the start of the window
+            var windowStart = baseDate.AddMonths(-totalMonths + bucketMonths);
+
+            // If Quarterly, align to the start of that quarter
             if (unit == "quarterly")
             {
-                // Compute calendar quarter (1..4) for current date
-                var currentQuarter = ((now.Month - 1) / 3) + 1;
-                // Start quarter index for the window
-                var startQuarter = currentQuarter - (nPeriods - 1);
-                var startYear = now.Year;
-
-                // If startQuarter <= 0, roll back years
-                while (startQuarter <= 0)
-                {
-                    startQuarter += 4;
-                    startYear -= 1;
-                }
-
-                var startMonth = (startQuarter - 1) * 3 + 1; // 1,4,7,10
-                return new DateTime(startYear, startMonth, 1, 0, 0, 0, DateTimeKind.Local);
+                int monthOffset = (windowStart.Month - 1) % 3;
+                windowStart = windowStart.AddMonths(-monthOffset);
             }
 
-            // Monthly (default) - keep rolling-month behaviour anchored at current month
-            var bucketMonths = 1;
-            return new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Local)
-                        .AddMonths(-((nPeriods * bucketMonths) - 1));
+            return windowStart;
         }
 
         //public async Task<SpillageSummaryDto> GetFullSummaryAsync(List<string> areaPaths, List<SprintDto> adoSprints, string projectId, bool isTask = false)
