@@ -843,7 +843,10 @@ namespace SRMDevOps.Repo
                 DeveloperStats = isTask
                     ? GetDeveloperStatsInternal(sectionSegment, adoSprints)
                     : new List<DeveloperSprintStatDto>(),
-                EffortVariance = isTask ? GetTeamEffortVariance(sectionSegment, dateMap) : new List<EffortVarianceDto>()
+                EffortVariance = isTask ? GetTeamEffortVariance(sectionSegment, dateMap) : new List<EffortVarianceDto>(),
+
+                CategoryBreakdowns = GetEffortBreakdowns(sectionSegment, "Category"),
+                ActivityBreakdowns = GetEffortBreakdowns(sectionSegment, "Activity")
             };
         }
 
@@ -1151,6 +1154,23 @@ namespace SRMDevOps.Repo
                 .ToList();
         }
 
+        private List<EffortBreakdownDto> GetEffortBreakdowns(List<UnifiedWorkItem> data, string type)
+        {
+            return data
+                .Where(x => x.State != null && x.State.Equals("Closed", StringComparison.OrdinalIgnoreCase))
+                .GroupBy(x => new {
+                    Developer = x.AssignedTo ?? "Unassigned",
+                    Attribute = (type == "Category" ? (x.ParentType ?? "Uncategorized") : (x.Activity ?? "Uncategorized"))
+                })
+                .Select(g => new EffortBreakdownDto
+                {
+                    Developer = g.Key.Developer,
+                    Attribute = g.Key.Attribute,
+                    TotalEffort = (double)g.Sum(x => (x.DevEffort ?? 0m) * 7m)
+                })
+                .ToList();
+        }
+
     }
 
     //for task/user story
@@ -1207,5 +1227,12 @@ namespace SRMDevOps.Repo
         public string ActivityType { get; set; } // "Dev", "PR", "Testing"
         public int Total { get; set; }
         public int Completed { get; set; }
+    }
+
+    public class EffortBreakdownDto
+    {
+        public string Developer { get; set; }
+        public string Attribute { get; set; } // e.g., "Feature", "Client Issue" or "Dev", "Testing"
+        public double TotalEffort { get; set; }
     }
 }

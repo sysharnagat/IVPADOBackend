@@ -16,5 +16,8 @@ namespace SRMDevOps.Dto
 
         public List<EffortVarianceDto> EffortVariance { get; set; } = new();
         public List<DeveloperSprintActivityDto> DeveloperActivityStats { get; set; } = new();
+
+        public List<EffortBreakdownDto> CategoryBreakdowns { get; set; } = new();
+        public List<EffortBreakdownDto> ActivityBreakdowns { get; set; } = new();
     }
 }
