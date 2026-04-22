@@ -637,6 +637,7 @@ namespace SRMDevOps.Repo
                         {
                             Sprint = label,
                             Developer = g.Key,
+                            SortDate = periodStart, // Use the latest sort date for the developer
                             TotalTasksAssigned = g.Sum(x => x.TotalTasksAssigned),
                             TotalTasksCompleted = g.Sum(x => x.TotalTasksCompleted),
                             TotalHours = g.Sum(x => x.TotalHours)
@@ -911,7 +912,7 @@ namespace SRMDevOps.Repo
                             TotalTasksAssigned = g.Count(),
                             TotalTasksCompleted = g.Count(x => x.State != null && x.State.Equals("Closed", StringComparison.OrdinalIgnoreCase)),
                             TotalHours = (double)g.Sum(x => x.DevEffort ?? 0m),
-                            SprintStartDate = sprintStart
+                            SortDate = sprintStart
                         },
                         SortDate = sprintStart
                     };
@@ -1058,10 +1059,10 @@ namespace SRMDevOps.Repo
                             x.State != null &&
                             x.State.Equals("Closed", StringComparison.OrdinalIgnoreCase)),
                         TotalHours = (double)g.Sum(x => x.DevEffort ?? 0m),
-                        SprintStartDate = sprintDates.Start
+                        SortDate = sprintDates.Start
                     };
                 })
-                .OrderBy(x => x.SprintStartDate)
+                .OrderBy(x => x.SortDate)
                 .ThenByDescending(x => x.TotalTasksCompleted)
                 .ToList();
 

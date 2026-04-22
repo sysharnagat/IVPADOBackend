@@ -7,6 +7,6 @@
         public int TotalTasksAssigned { get; set; }
         public int TotalTasksCompleted { get; set; }
         public double TotalHours { get; set; }
-        public DateTime? SprintStartDate { get; set; } // Add this for sorting
+        public DateTime? SortDate { get; set; } // Add this for sorting
     }
 }
